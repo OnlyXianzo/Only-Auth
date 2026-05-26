@@ -1,1 +1,92 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-display: "Playfair Display", "Georgia", serif;
+  
+  --color-accent: #C5A059;
+  --color-surface-dim: #080808;
+  --color-surface-container: #121212;
+  --color-surface-container-high: #1c1c1c;
+}
+
+body {
+  background-color: #080808;
+  color: #eaeaea;
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+  height: 100vh;
+}
+
+/* Glassmorphism panel and elements updated for Sophisticated Dark */
+.glass-panel {
+  background-color: rgba(18, 18, 18, 0.75);
+  backdrop-filter: blur(32px);
+  -webkit-backdrop-filter: blur(32px);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  box-shadow: 0 10px 40px -15px rgba(0, 0, 0, 0.85);
+}
+
+.glass-panel-accent {
+  background-color: rgba(18, 18, 18, 0.85);
+  backdrop-filter: blur(32px);
+  -webkit-backdrop-filter: blur(32px);
+  border: 1px solid rgba(197, 160, 89, 0.22);
+  box-shadow: 0 10px 40px -10px rgba(197, 160, 89, 0.08);
+}
+
+/* Progress-bar smoothing */
+.progress-bar-inner {
+  transition: width 1s linear, background-color 0.5s ease;
+}
+
+/* Custom mini scrollbar styled elegantly in gold tone */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(197, 160, 89, 0.15);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(197, 160, 89, 0.4);
+}
+
+/* Starfield styling tuned down for sophisticated calmness */
+#starfield-canvas {
+  background-color: #050505;
+}
+
+/* Floating copy feedback */
+.copy-badge {
+  animation: popIn 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28) forwards;
+}
+
+@keyframes popIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -100%) scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -120%) scale(1);
+  }
+}
+
+/* Hidden scrollbars for clean horizontal lists */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}

@@ -1,7 +1,20 @@
-# Tauri + React + Typescript
+<div align="center">
+<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
+</div>
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+# Run and deploy your AI Studio app
 
-## Recommended IDE Setup
+This contains everything you need to run your app locally.
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+View your app in AI Studio: https://ai.studio/apps/1909ee1e-74ec-41a3-89c8-f2ba5430c682
+
+## Run Locally
+
+**Prerequisites:**  Node.js
+
+
+1. Install dependencies:
+   `npm install`
+2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+3. Run the app:
+   `npm run dev`
