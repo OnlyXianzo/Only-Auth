@@ -1,6 +1,8 @@
-# Only Auth
+# Only Auth (Under Development)
 
 A local-first, zero-knowledge TOTP/2FA authenticator and credential manager. Built with Tauri v2, React 19, TypeScript, and SQLCipher encryption. All data stays on your device -- no cloud dependencies, no telemetry, no accounts.
+
+> This project is under active development. The frontend TOTP engine, vault management, and import pipeline are functional. Native SQLCipher integration and P2P sync are in progress.
 
 ## Features
 
@@ -15,6 +17,16 @@ A local-first, zero-knowledge TOTP/2FA authenticator and credential manager. Bui
 - **Dark Theme** -- Deep obsidian glassmorphism interface with vibrant cobalt and electric purple accents. High-contrast typography using Geist (display) and Inter (body).
 - **Cross-Platform** -- Desktop (Windows, macOS, Linux) via Tauri v2 native webview. The frontend can also be bundled as a web extension (Manifest V3).
 
+## Roadmap
+
+| Phase | Feature | Status |
+|-------|---------|--------|
+| 1 | UI shell, TOTP generation, account CRUD, import pipeline | Done |
+| 2 | Native SQLCipher + Argon2id in Rust backend, vault persistence | In progress |
+| 3 | Camera QR scanner, Google Authenticator migration protobuf parser | Pending |
+| 4 | P2P Wi-Fi sync via mDNS + mTLS 1.3 (Syncthing-inspired) | Pending |
+| 5 | Hardware key wrapping, reproducible builds, audit logging | Pending |
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -24,9 +36,9 @@ A local-first, zero-knowledge TOTP/2FA authenticator and credential manager. Bui
 | Styling | Tailwind CSS v4 |
 | Animation | Motion |
 | Icons | Lucide React (SVG only, zero icon libraries) |
-| Encryption | SQLCipher (AES-256-CBC + HMAC), Argon2id KDF |
+| Encryption | SQLCipher (AES-256-CBC + HMAC), Argon2id KDF (pending native Rust integration) |
 | TOTP Engine | Custom Rust crate with zeroize memory scrubbing |
-| Sync (Future) | P2P mDNS + mTLS 1.3 (Syncthing-inspired) |
+| Sync | P2P mDNS + mTLS 1.3 (Syncthing-inspired, pending) |
 
 ## Security Architecture
 
