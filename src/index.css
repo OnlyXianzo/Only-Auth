@@ -1,92 +1,181 @@
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
-  --font-display: "Playfair Display", "Georgia", serif;
-  
-  --color-accent: #C5A059;
-  --color-surface-dim: #080808;
-  --color-surface-container: #121212;
-  --color-surface-container-high: #1c1c1c;
+  --font-display: "Geist", "Inter", ui-sans-serif, sans-serif;
+
+  /* New Design System Colors */
+  --color-accent: #00dce5;
+  --color-primary: #b8c3ff;
+  --color-primary-action: #2d5bff;
+  --color-secondary: #d0bcff;
+
+  /* Surfaces */
+  --color-surface: #131313;
+  --color-surface-dim: #0e0e0e;
+  --color-surface-low: #1c1b1b;
+  --color-surface-container: #201f1f;
+  --color-surface-high: #2a2a2a;
+  --color-surface-highest: #353534;
+
+  /* Text */
+  --color-on-surface: #e5e2e1;
+  --color-on-surface-variant: #c4c5d9;
+
+  /* Borders */
+  --color-outline: #8e90a2;
+  --color-outline-variant: #434656;
 }
 
 body {
-  background-color: #080808;
-  color: #eaeaea;
+  background-color: #131313;
+  color: #e5e2e1;
   font-family: var(--font-sans);
   overflow-x: hidden;
   height: 100vh;
 }
 
-/* Glassmorphism panel and elements updated for Sophisticated Dark */
+/* Glass Panel — matches code.html spec */
 .glass-panel {
-  background-color: rgba(18, 18, 18, 0.75);
+  background-color: rgba(19, 19, 19, 0.4);
   backdrop-filter: blur(32px);
   -webkit-backdrop-filter: blur(32px);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 10px 40px -15px rgba(0, 0, 0, 0.85);
 }
 
+/* Accent-tinted glass for focused card */
 .glass-panel-accent {
-  background-color: rgba(18, 18, 18, 0.85);
+  background-color: rgba(19, 19, 19, 0.5);
   backdrop-filter: blur(32px);
   -webkit-backdrop-filter: blur(32px);
-  border: 1px solid rgba(197, 160, 89, 0.22);
-  box-shadow: 0 10px 40px -10px rgba(197, 160, 89, 0.08);
+  border: 1px solid rgba(0, 220, 229, 0.2);
+  box-shadow: 0 10px 40px -10px rgba(0, 220, 229, 0.08);
 }
 
-/* Progress-bar smoothing */
+/* Progress bar — cyan with glow */
 .progress-bar-inner {
   transition: width 1s linear, background-color 0.5s ease;
+  box-shadow: 0 0 12px rgba(0, 229, 255, 0.4);
 }
 
-/* Custom mini scrollbar styled elegantly in gold tone */
+/* Scrollbar — minimal white */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 4px;
+  height: 4px;
 }
-
 ::-webkit-scrollbar-track {
   background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
-  background: rgba(197, 160, 89, 0.15);
+  background: rgba(255, 255, 255, 0.06);
   border-radius: 10px;
 }
-
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(197, 160, 89, 0.4);
+  background: rgba(255, 255, 255, 0.12);
 }
 
-/* Starfield styling tuned down for sophisticated calmness */
+/* Starfield canvas */
 #starfield-canvas {
-  background-color: #050505;
+  background-color: #131313;
 }
 
-/* Floating copy feedback */
-.copy-badge {
-  animation: popIn 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28) forwards;
-}
-
-@keyframes popIn {
-  from {
-    opacity: 0;
-    transform: translate(-50%, -100%) scale(0.8);
-  }
-  to {
-    opacity: 1;
-    transform: translate(-50%, -120%) scale(1);
-  }
-}
-
-/* Hidden scrollbars for clean horizontal lists */
+/* Hidden scrollbar utility */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
 .no-scrollbar {
-  -ms-overflow-style: none;  /* IE and Edge */
-  scrollbar-width: none;  /* Firefox */
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Mobile drawer backdrop */
+.drawer-backdrop {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+
+/* Card background blur effect */
+.card-bg-blur {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  opacity: 0.15;
+  filter: blur(40px);
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+.group:hover .card-bg-blur {
+  opacity: 0.3;
+}
+
+/* Code hover copy interaction */
+.code-hover-target {
+  position: relative;
+  display: inline-block;
+  min-width: 90px;
+  text-align: right;
+}
+.code-hover-target .original-code {
+  transition: opacity 0.2s ease;
+}
+.code-hover-target .hover-text {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.code-hover-target:hover .original-code {
+  opacity: 0;
+}
+.code-hover-target:hover .hover-text {
+  opacity: 1;
+}
+
+/* Focus-card transition */
+.focus-card-transition {
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Animate fade in */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+  animation: fadeIn 0.35s ease both;
+}
+
+/* Scale hover micro-interaction */
+.scale-hover {
+  transition: transform 0.15s ease;
+}
+.scale-hover:hover {
+  transform: scale(1.05);
+}
+
+/* Word grid for passphrase reveal */
+.word-cell {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: #e5e2e1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.word-cell .word-index {
+  color: #00dce5;
+  font-size: 0.65rem;
+  font-weight: 600;
+  min-width: 1.25rem;
 }

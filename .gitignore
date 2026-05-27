@@ -5,4 +5,11 @@ coverage/
 .DS_Store
 *.log
 .env*
-!.env.example
+Plan/
+.env
+DESIGN.md
+code.html
+AGENTS.md
+GEMINI.md
+.agents
+
