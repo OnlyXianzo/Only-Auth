@@ -122,7 +122,7 @@ mod tests {
             period: 30,
         }];
         
-        let mut results = HashMap::new();
+        // Removed unused results HashMap
         // Since the prompt asks to test the exact bit-truncated hash, we mock time manually for the test
         // wait, the command uses SystemTime::now(). To test exactly, we can extract the core logic to a function.
         
