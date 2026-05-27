@@ -11,8 +11,10 @@ import { motion, AnimatePresence } from 'motion/react';
 import StarfieldBackground from './components/StarfieldBackground';
 import { Account, AppSettings } from './types';
 import {
-  generateTOTPCode, formatCode, formatFocusedCode,
-  SERVICE_COLORS, INITIAL_ACCOUNTS, getSecurityStrength
+  formatCode, formatFocusedCode,
+  SERVICE_COLORS, getSecurityStrength,
+  generateBatchTOTP, validateBase32, generateNewSecret,
+  BatchInput
 } from './utils';
 
 // ─── BIP-39 Mini Wordlist (256 common words for demo — real apps use full 2048) ───
@@ -185,7 +187,7 @@ export default function App() {
   const [accounts, setAccounts] = useState<Account[]>(() => {
     const saved = localStorage.getItem('onlyauth_accounts_v3');
     if (saved) { try { const p = JSON.parse(saved); if (Array.isArray(p)) return p; } catch {} }
-    return INITIAL_ACCOUNTS;
+    return [];
   });
 
   const [settings, setSettings] = useState<AppSettings>(() => {
@@ -318,7 +320,7 @@ export default function App() {
   // ── App state
   const [activeTag, setActiveTag] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [focusedAccountId, setFocusedAccountId] = useState<string>(() => INITIAL_ACCOUNTS[0]?.id || '');
+  const [focusedAccountId, setFocusedAccountId] = useState<string>('');
   const [secondsRemaining, setSecondsRemaining] = useState(30);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -458,6 +460,34 @@ export default function App() {
     const id = setInterval(update, 1000);
     return () => clearInterval(id);
   }, [settings.autoRenewInterval]);
+
+  // ── Batched TOTP codes from Rust backend
+  const [totpCodes, setTotpCodes] = useState<Record<string, string>>({});
+  const [totpLoading, setTotpLoading] = useState(true);
+
+  useEffect(() => {
+    let isCurrent = true;
+    const updateTokens = async () => {
+      const allAccounts = accounts.filter(a => a.secret && a.secret.trim() !== '');
+      if (allAccounts.length === 0) {
+        if (isCurrent) { setTotpCodes({}); setTotpLoading(false); }
+        return;
+      }
+      const batchPayload: BatchInput[] = allAccounts.map(acc => ({
+        id: acc.id,
+        secret: acc.secret,
+        digits: acc.digits ?? 6,
+        period: acc.period ?? 30,
+      }));
+      const freshCodes = await generateBatchTOTP(batchPayload);
+      if (isCurrent) {
+        setTotpCodes(freshCodes);
+        setTotpLoading(false);
+      }
+    };
+    updateTokens();
+    return () => { isCurrent = false; };
+  }, [secondsRemaining, accounts]);
 
   // ── Focus guard
   useEffect(() => {
@@ -716,9 +746,9 @@ export default function App() {
     setIsAddModalOpen(true);
   });
 
-  const handleGenerateSecret = () => {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-    setFormSecret(Array.from({ length: 16 }, () => chars[Math.floor(Math.random() * chars.length)]).join(''));
+  const handleGenerateSecret = async () => {
+    const secret = await generateNewSecret();
+    if (secret) setFormSecret(secret);
   };
 
   const triggerVerifyAction = (type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey', data?: any) => safeTransition(() => {
@@ -820,13 +850,13 @@ export default function App() {
     }
     setIsCameraActive(false);
   };
-  const injectScannedQRResult = () => {
+  const injectScannedQRResult = async () => {
     const names = ['Google Cloud', 'GitHub Actions', 'Stripe API', 'Vercel Deploy', 'AWS Console'];
     const logos: Account['logoType'][] = ['google', 'github', 'stripe', 'custom', 'aws'];
     const idx = Math.floor(Math.random() * names.length);
     setFormName(names[idx]); setFormEmail('admin@example.com');
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-    setFormSecret(Array.from({ length: 16 }, () => chars[Math.floor(Math.random() * chars.length)]).join(''));
+    const secret = await generateNewSecret();
+    setFormSecret(secret);
     setFormLogoType(logos[idx]);
     setFormNotes(`Imported via QR scan on ${new Date().toLocaleDateString()}`);
     setFormTagsString('scanned');
@@ -1065,7 +1095,7 @@ export default function App() {
     return matchesTag && matchesSearch;
   });
   const focusedAccount = visibleAccounts.find(a => a.id === focusedAccountId) || visibleAccounts[0] || null;
-  const focusedCode = focusedAccount ? generateTOTPCode(focusedAccount.secret, settings.autoRenewInterval) : '000000';
+  const focusedCode = focusedAccount ? (totpCodes[focusedAccount.id] || '------') : '------';
   const focusedCodeFormatted = formatFocusedCode(focusedCode);
   const passkeyStrength = getSecurityStrength(settings.passphraseHash || 'default');
   const isVaultTab = !['security', 'settings', 'support'].includes(activeTag);
@@ -1640,9 +1670,9 @@ export default function App() {
                               onClick={() => handleCopyCode(focusedAccount.id, focusedCode)}
                               className={`font-display font-bold text-white flex items-center gap-4 tracking-[0.1em] cursor-pointer hover:text-[#00dce5] transition-colors select-none ${c ? 'text-4xl md:text-5xl' : 'text-5xl md:text-6xl'}`}
                               title="Click to copy">
-                              <span>{focusedCodeFormatted.first}</span>
+                              <span className={totpCodes[focusedAccount?.id ?? ''] ? '' : 'animate-pulse opacity-50'}>{focusedCodeFormatted.first}</span>
                               <span className="w-2.5 h-2.5 bg-white/20 rounded-full shrink-0" />
-                              <span>{focusedCodeFormatted.second}</span>
+                              <span className={totpCodes[focusedAccount?.id ?? ''] ? '' : 'animate-pulse opacity-50'}>{focusedCodeFormatted.second}</span>
                             </motion.div>
 
                             {copyFeedbackMap[focusedAccount.id] && (
@@ -1693,7 +1723,7 @@ export default function App() {
                       <p className="text-[9px] uppercase tracking-[0.2em] font-bold text-[#8e90a2]">Pinned Accounts</p>
                       <div className="flex gap-3 overflow-x-auto pb-2 no-scrollbar">
                         {visibleAccounts.filter(a => a.isPinned).map(acc => {
-                          const pCode = generateTOTPCode(acc.secret, settings.autoRenewInterval);
+                          const pCode = totpCodes[acc.id] || '------';
                           const isSelected = focusedAccountId === acc.id;
                           return (
                             <div key={acc.id} onClick={() => setFocusedAccountId(acc.id)}
@@ -1707,7 +1737,7 @@ export default function App() {
                               <div className="flex justify-between items-center">
                                 {acc.secret && acc.secret.trim() !== "" ? (
                                   <>
-                                    <span className={`font-mono font-semibold text-white ${c ? 'text-base' : 'text-xl'}`}>{formatCode(pCode)}</span>
+                                    <span className={`font-mono font-semibold text-white ${c ? 'text-base' : 'text-xl'} ${totpCodes[acc.id] ? '' : 'animate-pulse opacity-50'}`}>{formatCode(pCode)}</span>
                                     <button onClick={e => { e.stopPropagation(); handleCopyCode(acc.id, pCode); }}
                                       className="w-7 h-7 rounded-lg bg-white/5 flex items-center justify-center text-[#c4c5d9] hover:text-[#00dce5]">
                                       {copyFeedbackMap[acc.id] ? <Check className="w-3.5 h-3.5 text-[#00dce5]" /> : <Copy className="w-3 h-3" />}
@@ -1739,7 +1769,7 @@ export default function App() {
                   <div className={`grid gap-${c ? '1.5' : '3'} ${settings.accountListPlacement === 'right' ? 'grid-cols-1 max-h-[75vh] overflow-y-auto pr-0.5' : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'}`}>
                     {filteredAccounts.length > 0 ? filteredAccounts.map(acc => {
                       const isFocused = focusedAccountId === acc.id;
-                      const aCode = generateTOTPCode(acc.secret, settings.autoRenewInterval);
+                      const aCode = totpCodes[acc.id] || '------';
                       return (
                         <motion.div key={acc.id} onClick={() => setFocusedAccountId(acc.id)}
                           whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }}
@@ -1762,7 +1792,7 @@ export default function App() {
                           </div>
                           {acc.secret && acc.secret.trim() !== "" ? (
                             <div className="code-hover-target ml-3 shrink-0" onClick={e => { e.stopPropagation(); handleCopyCode(acc.id, aCode); }}>
-                              <span className={`original-code font-mono font-semibold text-white group-hover:text-[#00dce5] transition-colors ${c ? 'text-xs' : 'text-sm'}`}>{formatCode(aCode)}</span>
+                              <span className={`original-code font-mono font-semibold text-white group-hover:text-[#00dce5] transition-colors ${c ? 'text-xs' : 'text-sm'} ${totpCodes[acc.id] ? '' : 'animate-pulse opacity-50'}`}>{formatCode(aCode)}</span>
                               <span className="hover-text text-[9px] text-[#00dce5] font-bold font-sans uppercase">
                                 {copyFeedbackMap[acc.id] ? '✓' : 'COPY'}
                               </span>
@@ -2253,9 +2283,9 @@ export default function App() {
                             <Download className="w-3.5 h-3.5" />
                           </button>
 
-                          <button onClick={() => { if (confirm('Reset to sample accounts?')) { setAccounts(INITIAL_ACCOUNTS); } }}
+                          <button onClick={() => { if (confirm('WARNING: This will permanently delete ALL accounts from your vault. This action cannot be undone. Continue?')) { setAccounts([]); } }}
                             className="w-full h-10 px-4 rounded-xl border border-red-500/20 hover:border-red-500/40 hover:bg-red-950/10 text-red-400 transition-all text-xs font-semibold flex items-center justify-between">
-                            <span>Reset to Defaults</span>
+                            <span>Factory Reset Vault</span>
                             <AlertTriangle className="w-3.5 h-3.5" />
                           </button>
                         </div>

@@ -10,6 +10,9 @@ export interface Account {
   color?: string;
   tags?: string[];
   createdAt: string;
+  digits?: number;    // TOTP digit count (default 6)
+  period?: number;    // TOTP period in seconds (default 30)
+  algorithm?: 'SHA1' | 'SHA256' | 'SHA512';  // HMAC algorithm
 }
 
 export interface HiddenVaultSettings {

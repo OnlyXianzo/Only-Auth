@@ -1,28 +1,37 @@
+import { invoke } from '@tauri-apps/api/core';
 import { Account } from './types';
 
-/**
- * Generates a deterministic 6-digit code based on a secret string and the current time block.
- * This mimics an authentic TOTP algorithm like Google Authenticator without requiring external crypto packages.
- */
-export function generateTOTPCode(secret: string, interval = 30): string {
-  if (!secret) return '000000';
-  
-  // Calculate current 30s epoch chunk
-  const epoch = Math.floor(Date.now() / (interval * 1000));
-  
-  // Simple deterministic hash matching
-  let hash = 0;
-  const combinedStr = secret + String(epoch);
-  
-  for (let i = 0; i < combinedStr.length; i++) {
-    const char = combinedStr.charCodeAt(i);
-    hash = (hash << 5) - hash + char;
-    hash |= 0; // Convert to 32bit integer
+export interface BatchInput {
+  id: string;
+  secret: string;
+  digits: number;
+  period: number;
+}
+
+export async function generateBatchTOTP(accounts: BatchInput[]): Promise<Record<string, string>> {
+  try {
+    return await invoke<Record<string, string>>('generate_totp_batch', { accounts });
+  } catch {
+    return {};
   }
-  
-  // Derive a key between 100000 and 999999
-  const baseNum = Math.abs(hash) % 900000 + 100000;
-  return String(baseNum);
+}
+
+export async function validateBase32(secret: string): Promise<boolean> {
+  try {
+    return await invoke<boolean>('validate_base32', { secret });
+  } catch {
+    return false;
+  }
+}
+
+export async function generateNewSecret(): Promise<string> {
+  try {
+    return await invoke<string>('generate_secret', {});
+  } catch {
+    // Fallback: JS-based generation for browser-only dev mode
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    return Array.from({ length: 32 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  }
 }
 
 /**
@@ -58,88 +67,7 @@ export const SERVICE_COLORS: Record<string, { bg: string; text: string; border: 
   custom: { bg: 'bg-teal-500/10', text: 'text-teal-400', border: 'border-teal-500/20' },
 };
 
-/**
- * Pre-populate with realistic mock accounts matching the screenshot exactly
- */
-export const INITIAL_ACCOUNTS: Account[] = [
-  {
-    id: 'github-acc',
-    name: 'GitHub',
-    email: 'developer@onlyauth.com',
-    secret: 'GITHUB_SEC_2026_PRODUCTION',
-    notes: 'Primary production account for core infrastructure projects and repositories.',
-    category: 'personal',
-    isPinned: false, // In layout, it is shown in "Focused" slot, not pinned scroll but we can focus it. 
-    logoType: 'github',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'google-acc',
-    name: 'Google Workspace',
-    email: 'cloud-admin@onlyauth.com',
-    secret: 'GOOGLE_WORK_SPACE_SECRET_KEY',
-    notes: 'Enterprise console credentials for workspace sync, billing managers and directory management.',
-    category: 'work',
-    isPinned: true,
-    logoType: 'google',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'aws-acc',
-    name: 'AWS Root',
-    email: 'root-security@onlyauth.com',
-    secret: 'AWS_ROOT_MFA_VAULT_KEY',
-    notes: 'Absolute administrator permission secret. Secure rotation cycle is active.',
-    category: 'work',
-    isPinned: true,
-    logoType: 'aws',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'discord-acc',
-    name: 'Discord (Main)',
-    email: 'gamer@onlyauth.com',
-    secret: 'DISCORD_MOCK_SECRET_GAMER',
-    notes: 'Main communication credentials for general technology channels, project servers, and dev feeds.',
-    category: 'personal',
-    isPinned: false,
-    logoType: 'discord',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'stripe-acc',
-    name: 'Stripe Dashboard Extra Long Name Example',
-    email: 'finance-dept-long-email@verylargecorporation.io',
-    secret: 'STRIPE_MOCK_SECRET_FINANCE',
-    notes: 'Merchant ledger authentication portal. Restrict access strictly with this hardware-separated OTP.',
-    category: 'work',
-    isPinned: false,
-    logoType: 'stripe',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'slack-acc',
-    name: 'Slack Workspace',
-    email: 'dev-team@workspace.com',
-    secret: 'SLACK_MOCK_SECRET_TEAM',
-    notes: 'Developer hub communications login.',
-    category: 'work',
-    isPinned: false,
-    logoType: 'slack',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'proton-acc',
-    name: 'ProtonMail',
-    email: 'secure@proton.me',
-    secret: 'PROTONMAIL_MOCK_SECRET_SECURE',
-    notes: 'Encrypted message board secondary administrative routing key.',
-    category: 'personal',
-    isPinned: false,
-    logoType: 'proton',
-    createdAt: new Date().toISOString()
-  }
-];
+
 
 /**
  * Checks security rating of a Secret Key
