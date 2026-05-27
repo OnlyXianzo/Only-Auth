@@ -142,7 +142,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   passphraseHash: '',
   masterKeyHash: '',
   pinHash: '',
-  autoRenewInterval: 30,
+  autoRenewInterval: 60,
   accountListPlacement: 'right',
   lastBackupDate: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
   customTags: ['personal', 'work', 'finance', 'social'],
@@ -153,6 +153,10 @@ const DEFAULT_SETTINGS: AppSettings = {
   appLockEnabled: true,
   appLockMethod: 'passphrase',
   pinAttempts: 0,
+  forceSearchOnStartup: false,
+  devAccountName: 'Dev Account',
+  devAccountTag: 'Premium',
+  githubContributor: false,
 };
 
 // Helper for Bitwarden URI parsing
@@ -232,6 +236,33 @@ export default function App() {
   const [focusedAccountId, setFocusedAccountId] = useState<string>(() => INITIAL_ACCOUNTS[0]?.id || '');
   const [secondsRemaining, setSecondsRemaining] = useState(30);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const saved = localStorage.getItem('onlyauth_sidebar_width');
+    return saved ? parseInt(saved, 10) : 288;
+  });
+  const [isResizing, setIsResizing] = useState(false);
+  const [isThanksActive, setIsThanksActive] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem('onlyauth_sidebar_width', sidebarWidth.toString());
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    if (!isResizing) return;
+    const doDrag = (e: MouseEvent) => {
+      const newWidth = Math.max(180, Math.min(450, e.clientX));
+      setSidebarWidth(newWidth);
+    };
+    const stopDrag = () => {
+      setIsResizing(false);
+    };
+    document.addEventListener('mousemove', doDrag);
+    document.addEventListener('mouseup', stopDrag);
+    return () => {
+      document.removeEventListener('mousemove', doDrag);
+      document.removeEventListener('mouseup', stopDrag);
+    };
+  }, [isResizing]);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
   // Modals
@@ -256,12 +287,14 @@ export default function App() {
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraStatus, setCameraStatus] = useState('');
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const pinInputRef = useRef<HTMLInputElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   
   // Icon Picker state
   const [showIconPicker, setShowIconPicker] = useState(false);
 
   // Settings sub-states
-  const [settingsSubTab, setSettingsSubTab] = useState<'layout' | 'passphrase' | 'tags' | 'import-export' | 'hardware' | 'app-lock'>('layout');
+  const [settingsSubTab, setSettingsSubTab] = useState<'layout' | 'profile' | 'passphrase' | 'tags' | 'import-export' | 'hardware' | 'app-lock'>('layout');
   const [newTagName, setNewTagName] = useState('');
   const [newPinField, setNewPinField] = useState('');
   const [newPinConfirm, setNewPinConfirm] = useState('');
@@ -333,12 +366,13 @@ export default function App() {
   useEffect(() => {
     const update = () => {
       const now = Math.floor(Date.now() / 1000);
-      setSecondsRemaining(30 - (now % 30));
+      const interval = settings.autoRenewInterval || 60;
+      setSecondsRemaining(interval - (now % interval));
     };
     update();
     const id = setInterval(update, 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [settings.autoRenewInterval]);
 
   // ── Focus guard
   useEffect(() => {
@@ -346,6 +380,56 @@ export default function App() {
       setFocusedAccountId(accounts[0].id);
     }
   }, [accounts, focusedAccountId]);
+
+  // ── Auto-search on startup focus
+  useEffect(() => {
+    if (!isLocked && settings.forceSearchOnStartup) {
+      const timer = setTimeout(() => {
+        searchInputRef.current?.focus();
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [isLocked, settings.forceSearchOnStartup]);
+
+  // ── PIN auto-submission
+  useEffect(() => {
+    if (isLocked && unlockMethod === 'pin' && unlockInput.length === 4) {
+      const triggerUnlock = async () => {
+        const hash = await sha256(unlockInput);
+        if (hash === settings.pinHash) {
+          safeTransition(() => {
+            setIsLocked(false);
+            setUnlockError('');
+            setUnlockInput('');
+            setSettings(prev => ({ ...prev, pinAttempts: 0 }));
+          });
+        } else {
+          const nextAttempts = settings.pinAttempts + 1;
+          setSettings(prev => ({ ...prev, pinAttempts: nextAttempts }));
+          if (nextAttempts >= 5) {
+            setUnlockError('PIN locked out due to 5 failed attempts. Master passphrase required.');
+            setUnlockMethod('passphrase');
+          } else {
+            setUnlockError(`Incorrect PIN. Attempt ${nextAttempts}/5.`);
+          }
+          setUnlockInput('');
+        }
+      };
+      triggerUnlock();
+    }
+  }, [unlockInput, unlockMethod, isLocked, settings.pinHash, settings.pinAttempts]);
+
+  // ── Recurrent Gratitude Micro-Animation
+  useEffect(() => {
+    if (!settings.githubContributor) return;
+    const interval = setInterval(() => {
+      setIsThanksActive(true);
+      setTimeout(() => {
+        setIsThanksActive(false);
+      }, 1500); // show for 1.5 seconds
+    }, 15000); // trigger every 15 seconds
+    return () => clearInterval(interval);
+  }, [settings.githubContributor]);
 
   // ── Setup: generate keys
   const handleChooseWords = () => safeTransition(() => {
@@ -990,16 +1074,16 @@ export default function App() {
             <p className="text-sm text-[#c4c5d9] mt-1">Only Auth</p>
           </div>
 
-          {/* Method tabs - only visible if App Lock is enabled */}
-          {settings.appLockEnabled && (
+          {/* Method tabs - only visible if App Lock is enabled and NOT locked out */}
+          {settings.appLockEnabled && !isPinLocked && (settings.pinHash || (biometricsSupported && settings.appLockMethod === 'biometrics')) && (
             <div className="flex gap-1 bg-white/5 rounded-xl p-1 w-full">
-              {(['passphrase', 'pin', 'biometrics'] as const).map(method => {
-                if (method === 'pin' && isPinLocked) return null;
-                if (method === 'biometrics' && !biometricsSupported) return null;
+              {(['pin', 'biometrics'] as const).map(method => {
+                if (method === 'pin' && !settings.pinHash) return null;
+                if (method === 'biometrics' && (!biometricsSupported || settings.appLockMethod !== 'biometrics')) return null;
                 return (
                   <button key={method} type="button" onClick={() => { setUnlockMethod(method); setUnlockError(''); setUnlockInput(''); }}
                     className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all capitalize ${unlockMethod === method ? 'bg-white/10 text-white' : 'text-[#8e90a2] hover:text-white'}`}>
-                    {method === 'biometrics' ? '⬡ Bio' : method === 'pin' ? 'PIN' : 'Passphrase'}
+                    {method === 'biometrics' ? '⬡ Bio' : 'PIN'}
                   </button>
                 );
               })}
@@ -1017,21 +1101,107 @@ export default function App() {
               </p>
             </div>
           ) : (
-            <form onSubmit={handleUnlock} className="w-full space-y-3">
-              <div className="relative">
-                <input type={showUnlockInput ? 'text' : 'password'} value={unlockInput} onChange={e => setUnlockInput(e.target.value)}
-                  autoFocus placeholder={unlockMethod === 'pin' ? 'Enter your PIN' : 'Enter your passphrase / master key'}
-                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#00dce5]/50 focus:ring-1 focus:ring-[#00dce5]/20 transition-all pr-10" />
-                <button type="button" onClick={() => setShowUnlockInput(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8e90a2] hover:text-white transition-colors">
-                  {showUnlockInput ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
+            <form onSubmit={handleUnlock} className="w-full space-y-4 flex flex-col items-center">
+              {unlockMethod === 'pin' ? (
+                <div className="flex flex-col items-center gap-4 w-full relative">
+                  {/* Hidden Input for physical keyboard capture */}
+                  <input
+                    ref={pinInputRef}
+                    type="password"
+                    pattern="\d*"
+                    maxLength={4}
+                    value={unlockInput}
+                    onChange={e => {
+                      const val = e.target.value.replace(/\D/g, '').substring(0, 4);
+                      setUnlockInput(val);
+                    }}
+                    autoFocus
+                    className="absolute inset-0 opacity-0 cursor-default z-10 w-full h-8"
+                    placeholder="PIN"
+                  />
+                  {/* 4 Circles Display */}
+                  <div onClick={() => pinInputRef.current?.focus()} className="flex gap-4 py-2 cursor-pointer relative z-20">
+                    {Array.from({ length: 4 }).map((_, idx) => {
+                      const isFilled = unlockInput.length > idx;
+                      return (
+                        <div
+                          key={idx}
+                          className={`w-4 h-4 rounded-full border-2 transition-all duration-200 ${
+                            isFilled
+                              ? 'bg-[#00dce5] border-[#00dce5] shadow-[0_0_10px_rgba(0,229,255,0.5)] scale-110'
+                              : 'bg-transparent border-white/20'
+                          }`}
+                        />
+                      );
+                    })}
+                  </div>
+                  
+                  {/* Visual Numeric Keypad for Touch/Mobile */}
+                  <div className="grid grid-cols-3 gap-3 w-full max-w-[220px] mx-auto mt-2 relative z-20">
+                    {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
+                      <button
+                        key={num}
+                        type="button"
+                        onClick={() => {
+                          if (unlockInput.length < 4) {
+                            setUnlockInput(prev => prev + num);
+                          }
+                        }}
+                        className="w-11 h-11 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-sm font-semibold text-white flex items-center justify-center mx-auto"
+                      >
+                        {num}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setUnlockInput('')}
+                      className="w-11 h-11 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-[8px] font-bold text-[#8e90a2] hover:text-white flex items-center justify-center mx-auto"
+                    >
+                      CLEAR
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (unlockInput.length < 4) {
+                          setUnlockInput(prev => prev + '0');
+                        }
+                      }}
+                      className="w-11 h-11 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-sm font-semibold text-white flex items-center justify-center mx-auto"
+                    >
+                      0
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUnlockInput(prev => prev.slice(0, -1))}
+                      className="w-11 h-11 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-xs font-bold text-[#8e90a2] hover:text-white flex items-center justify-center mx-auto"
+                    >
+                      ⌫
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="relative w-full">
+                  <input
+                    type={showUnlockInput ? 'text' : 'password'}
+                    value={unlockInput}
+                    onChange={e => setUnlockInput(e.target.value)}
+                    autoFocus
+                    placeholder="Enter your passphrase / master key"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#00dce5]/50 focus:ring-1 focus:ring-[#00dce5]/20 transition-all pr-10"
+                  />
+                  <button type="button" onClick={() => setShowUnlockInput(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8e90a2] hover:text-white transition-colors">
+                    {showUnlockInput ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              )}
+
               {unlockError && (
                 <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
-                  className="text-xs text-red-400 bg-red-950/20 border border-red-900/30 rounded-xl p-3 flex items-center gap-2">
+                  className="text-xs text-red-400 bg-red-950/20 border border-red-900/30 rounded-xl p-3 flex items-center gap-2 w-full">
                   <AlertTriangle className="w-4 h-4 shrink-0" /> {unlockError}
                 </motion.div>
               )}
+              
               <button type="submit" className="w-full py-3 rounded-xl bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white font-semibold text-sm hover:opacity-90 transition-opacity">
                 Unlock →
               </button>
@@ -1056,7 +1226,10 @@ export default function App() {
   ];
 
   return (
-    <div className={`relative min-h-screen w-full flex select-none text-[#e5e2e1] font-sans antialiased overflow-hidden ${isTransitioning ? 'pointer-events-none opacity-90' : ''}`}>
+    <div className={`relative min-h-screen w-full flex select-none text-[#e5e2e1] font-sans antialiased overflow-hidden ${isTransitioning ? 'pointer-events-none opacity-90' : ''}`}
+      style={{
+        '--sidebar-width': sidebarCollapsed ? '72px' : `${sidebarWidth}px`
+      } as React.CSSProperties}>
       <StarfieldBackground speed={0.8} />
 
       {/* Mobile drawer backdrop */}
@@ -1069,9 +1242,9 @@ export default function App() {
       </AnimatePresence>
 
       {/* ── SIDEBAR ──────────────────────────────────────────────────────── */}
-      <aside className={`fixed inset-y-0 left-0 z-50 flex flex-col h-full bg-black/30 backdrop-blur-[32px] border-r border-white/5 shadow-2xl transition-all duration-300
-        ${sidebarCollapsed ? 'w-[72px]' : 'w-72'}
-        ${mobileDrawerOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+      <aside className={`fixed inset-y-0 left-0 z-50 flex flex-col h-full bg-black/30 backdrop-blur-[32px] border-r border-white/5 shadow-2xl w-[var(--sidebar-width)]
+        ${isResizing ? '' : 'transition-all duration-300'}
+        ${mobileDrawerOpen ? 'translate-x-0 !w-72' : '-translate-x-full md:translate-x-0'}`}>
 
         {/* Sidebar header */}
         <div className="h-16 px-4 flex items-center justify-between shrink-0 border-b border-white/5">
@@ -1122,11 +1295,13 @@ export default function App() {
 
           {/* Static nav divider */}
           <div className="mt-3 pt-3 border-t border-white/5 flex flex-col gap-1">
-            {sidebarTabs.map(tab => {
+            {/* Security */}
+            {(() => {
+              const tab = sidebarTabs[0];
               const Icon = tab.icon;
               const isActive = activeTag === tab.value;
               return (
-                <button key={tab.value} onClick={() => safeTransition(() => { setActiveTag(tab.value); setMobileDrawerOpen(false); })}
+                <button onClick={() => safeTransition(() => { setActiveTag(tab.value); setMobileDrawerOpen(false); })}
                   className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all border-l-2 ${
                     isActive ? 'bg-white/5 text-white border-[#00dce5] font-semibold' : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
                   } ${sidebarCollapsed ? 'justify-center px-0 border-l-0 rounded-full w-10 h-10 mx-auto' : ''}`}>
@@ -1134,18 +1309,18 @@ export default function App() {
                   {!sidebarCollapsed && <span>{tab.label}</span>}
                 </button>
               );
-            })}
+            })()}
 
-            {/* Import / Export sidebar shortcuts */}
+            {/* Import / Export sidebar shortcuts - Placed immediately after Security */}
             {!sidebarCollapsed ? (
-              <div className="pl-4 flex flex-col gap-0.5 mt-1 border-l border-white/5 ml-4">
+              <div className="pl-4 flex flex-col gap-0.5 mt-0.5 border-l border-white/5 ml-4">
                 <button onClick={() => safeTransition(() => { setActiveTag('settings'); setSettingsSubTab('import-export'); setMobileDrawerOpen(false); })}
-                  className="flex items-center gap-2 py-1.5 text-[11px] text-[#c4c5d9] hover:text-[#00dce5] transition-colors text-left">
+                  className="flex items-center gap-2 py-1.5 text-[11px] text-[#c4c5d9] hover:text-[#00dce5] transition-colors text-left font-medium">
                   <Upload className="w-3.5 h-3.5" />
                   <span>Import</span>
                 </button>
                 <button onClick={() => safeTransition(() => { setActiveTag('settings'); setSettingsSubTab('import-export'); setMobileDrawerOpen(false); })}
-                  className="flex items-center gap-2 py-1.5 text-[11px] text-[#c4c5d9] hover:text-[#00dce5] transition-colors text-left">
+                  className="flex items-center gap-2 py-1.5 text-[11px] text-[#c4c5d9] hover:text-[#00dce5] transition-colors text-left font-medium">
                   <Download className="w-3.5 h-3.5" />
                   <span>Export</span>
                 </button>
@@ -1164,6 +1339,21 @@ export default function App() {
                 </button>
               </div>
             )}
+
+            {/* Settings & Support */}
+            {sidebarTabs.slice(1).map(tab => {
+              const Icon = tab.icon;
+              const isActive = activeTag === tab.value;
+              return (
+                <button key={tab.value} onClick={() => safeTransition(() => { setActiveTag(tab.value); setMobileDrawerOpen(false); })}
+                  className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all border-l-2 ${
+                    isActive ? 'bg-white/5 text-white border-[#00dce5] font-semibold' : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
+                  } ${sidebarCollapsed ? 'justify-center px-0 border-l-0 rounded-full w-10 h-10 mx-auto' : ''}`}>
+                  <Icon className="w-4 h-4 shrink-0" />
+                  {!sidebarCollapsed && <span>{tab.label}</span>}
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -1172,10 +1362,16 @@ export default function App() {
           <div className="glass-panel p-3 rounded-2xl flex flex-col gap-2.5">
             {!sidebarCollapsed && (
               <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#2d5bff] to-[#8B5CF6] flex items-center justify-center text-white font-semibold text-xs shrink-0">DA</div>
-                <div className="min-w-0">
-                  <h4 className="text-white text-xs font-semibold truncate">Dev Account</h4>
-                  <p className="text-[9px] text-[#00dce5] uppercase tracking-wider font-semibold">Premium</p>
+                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#2d5bff] to-[#8B5CF6] flex items-center justify-center text-white font-semibold text-xs shrink-0">
+                  {(settings.devAccountName || 'Dev Account').trim().split(/\s+/).map(n => n[0] || '').join('').substring(0, 2).toUpperCase() || 'DA'}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h4 className="text-white text-xs font-semibold truncate">{settings.devAccountName || 'Dev Account'}</h4>
+                  <p className="text-[9px] text-[#00dce5] uppercase tracking-wider font-semibold truncate h-[13px] flex items-center">
+                    <span className="transition-all duration-300">
+                      {isThanksActive ? 'Thanks for contri..' : (settings.devAccountTag || 'Premium')}
+                    </span>
+                  </p>
                 </div>
               </div>
             )}
@@ -1186,10 +1382,18 @@ export default function App() {
             </button>
           </div>
         </div>
+
+        {/* Drag resize handle */}
+        {!sidebarCollapsed && (
+          <div
+            onMouseDown={() => setIsResizing(true)}
+            className="absolute top-0 right-0 w-[4px] h-full cursor-col-resize hover:bg-[#00dce5]/50 active:bg-[#00dce5] transition-colors z-50"
+          />
+        )}
       </aside>
 
       {/* ── MAIN ─────────────────────────────────────────────────────────── */}
-      <main className={`flex-1 flex flex-col transition-all duration-300 ${sidebarCollapsed ? 'md:ml-[72px]' : 'md:ml-72'} h-screen overflow-hidden`}>
+      <main className={`flex-1 flex flex-col h-screen overflow-hidden md:ml-[var(--sidebar-width)] ${isResizing ? '' : 'transition-all duration-300'}`}>
 
         {/* Header */}
         <header className="w-full h-16 px-4 md:px-8 flex items-center justify-between border-b border-white/5 shrink-0 relative z-20 gap-3">
@@ -1201,10 +1405,6 @@ export default function App() {
             <h1 className="font-display font-semibold text-lg md:text-xl text-white capitalize leading-none">
               {activeTag === 'all' ? 'Dashboard' : activeTag === 'security' ? 'Security' : activeTag === 'settings' ? 'Settings' : activeTag === 'support' ? 'Support' : activeTag}
             </h1>
-            <span className="hidden sm:flex items-center gap-1.5 text-[9px] px-2 py-1 rounded-full bg-[#00dce5]/10 border border-[#00dce5]/20 text-[#00dce5] tracking-widest font-mono font-semibold uppercase">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#00dce5] animate-pulse" />
-              Secure
-            </span>
           </div>
 
           <div className="flex items-center gap-2">
@@ -1212,7 +1412,7 @@ export default function App() {
             {isVaultTab && (
               <div className="relative hidden sm:block">
                 <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8e90a2]" />
-                <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search accounts..."
+                <input ref={searchInputRef} type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search accounts..."
                   className="w-48 md:w-60 bg-white/5 border border-white/10 rounded-full py-2 pl-9 pr-4 text-xs text-white focus:outline-none focus:border-[#00dce5]/40 focus:ring-1 focus:ring-[#00dce5]/20 transition-all placeholder-[#8e90a2]" />
               </div>
             )}
@@ -1308,7 +1508,7 @@ export default function App() {
                           </button>
                         </div>
                         <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
-                          <div className="h-full progress-bar-inner bg-[#00dce5]" style={{ width: `${(secondsRemaining / 30) * 100}%` }} />
+                          <div className="h-full progress-bar-inner bg-[#00dce5]" style={{ width: `${(secondsRemaining / (settings.autoRenewInterval || 60)) * 100}%` }} />
                         </div>
                       </div>
                     </div>
@@ -1366,7 +1566,10 @@ export default function App() {
                         <motion.div key={acc.id} onClick={() => setFocusedAccountId(acc.id)}
                           whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }}
                           className={`glass-panel ${c ? 'rounded-xl p-2.5' : 'rounded-2xl p-4'} flex items-center justify-between cursor-pointer transition-all group border-l-2 ${
-                            isFocused ? 'border-l-[#00dce5] bg-white/5' : 'border-l-transparent hover:bg-white/5'}`}>
+                            isFocused
+                              ? 'border-l-[#00dce5] bg-white/5 border-t-transparent border-r-transparent border-b-transparent'
+                              : 'border-l-transparent border-t-white/8 border-r-white/8 border-b-white/8 hover:border-l-[#00dce5]/60 hover:border-t-transparent hover:border-r-transparent hover:border-b-transparent hover:bg-white/5'
+                          }`}>
                           <div className="flex items-center gap-3 min-w-0 flex-1">
                             <div className="shrink-0">
                               <BrandLogo name={acc.name} logoType={acc.logoType} className={`${c ? 'w-8 h-8 text-xs' : 'w-11 h-11 text-xs'}`} />
@@ -1483,6 +1686,7 @@ export default function App() {
                 <div className="flex gap-1 bg-white/5 rounded-xl p-1 flex-wrap">
                   {([
                     { value: 'layout', label: 'Layout' },
+                    { value: 'profile', label: 'Profile & Perks' },
                     { value: 'passphrase', label: 'Passphrase' },
                     { value: 'tags', label: 'Tags' },
                     { value: 'import-export', label: 'Import & Export' },
@@ -1512,6 +1716,18 @@ export default function App() {
                       </button>
                     </div>
 
+                    {/* Force Search on Startup */}
+                    <div className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/8">
+                      <div>
+                        <p className="text-sm font-semibold text-white">Focus Search on Startup</p>
+                        <p className="text-xs text-[#8e90a2] mt-0.5">Automatically focus search bar on startup or vault unlock</p>
+                      </div>
+                      <button onClick={() => setSettings(prev => ({ ...prev, forceSearchOnStartup: !prev.forceSearchOnStartup }))}
+                        className={`relative w-10 h-6 rounded-full transition-colors ${settings.forceSearchOnStartup ? 'bg-[#00dce5]' : 'bg-white/10'}`}>
+                        <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${settings.forceSearchOnStartup ? 'left-5' : 'left-1'}`} />
+                      </button>
+                    </div>
+
                     {/* Account list placement */}
                     <div className="space-y-2">
                       <label className="text-[10px] uppercase tracking-wider font-semibold text-[#8e90a2]">Account List Position</label>
@@ -1523,6 +1739,106 @@ export default function App() {
                             <div className="text-[10px] text-[#8e90a2]">{pos === 'right' ? 'Side-by-side on wide screens' : 'Stacked layout with wider grid'}</div>
                           </button>
                         ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {settingsSubTab === 'profile' && (
+                  <div className="glass-panel rounded-2xl p-6 border border-white/8 space-y-6">
+                    <h3 className="font-display text-base font-semibold text-white">Profile & Perks</h3>
+
+                    <div className="space-y-4">
+                      {/* Name input */}
+                      <div className="space-y-2">
+                        <label className="text-[10px] uppercase tracking-wider font-semibold text-[#8e90a2]">Dev Account Name</label>
+                        <input
+                          type="text"
+                          value={settings.devAccountName}
+                          onChange={e => setSettings(prev => ({ ...prev, devAccountName: e.target.value }))}
+                          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/50 focus:ring-1 focus:ring-[#00dce5]/20 transition-all"
+                          placeholder="Dev Account"
+                        />
+                      </div>
+
+                      {/* Custom Tag input */}
+                      <div className="space-y-2">
+                        <label className="text-[10px] uppercase tracking-wider font-semibold text-[#8e90a2]">Custom Premium Tag</label>
+                        <input
+                          type="text"
+                          value={settings.devAccountTag}
+                          disabled={!settings.githubContributor}
+                          onChange={e => setSettings(prev => ({ ...prev, devAccountTag: e.target.value }))}
+                          className={`w-full bg-white/5 border rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:ring-1 transition-all ${
+                            settings.githubContributor 
+                              ? 'border-white/10 focus:border-[#00dce5]/50 focus:ring-[#00dce5]/20' 
+                              : 'border-white/5 text-neutral-500 cursor-not-allowed opacity-50'
+                          }`}
+                          placeholder={settings.githubContributor ? "Premium" : "Star repo to unlock custom tags!"}
+                        />
+                        {!settings.githubContributor && (
+                          <p className="text-[10px] text-amber-400/80">🔒 Star or donate on GitHub to unlock custom profile tags.</p>
+                        )}
+                      </div>
+
+                      {/* Sliding Sidebar setting */}
+                      <div className="space-y-2 pt-2 border-t border-white/5">
+                        <div className="flex justify-between items-center">
+                          <label className="text-[10px] uppercase tracking-wider font-semibold text-[#8e90a2]">Sidebar Panel Width</label>
+                          <span className="text-[10px] font-mono text-[#00dce5]">{sidebarWidth}px</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="180"
+                          max="450"
+                          value={sidebarWidth}
+                          onChange={e => setSidebarWidth(parseInt(e.target.value, 10))}
+                          className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#00dce5]"
+                        />
+                      </div>
+                    </div>
+
+                    {/* GitHub Contributor Loop (Emotional Message) */}
+                    <div className="pt-4 border-t border-white/5 space-y-4">
+                      <div className="p-4 bg-gradient-to-br from-neutral-900 to-black rounded-2xl border border-white/5 relative overflow-hidden flex flex-col gap-3">
+                        <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-[#00dce5]/40 to-transparent" />
+                        <h4 className="text-xs font-semibold text-white flex items-center gap-1.5">
+                          <svg className="w-4 h-4 text-[#00dce5]" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                          Support Privacy & Security
+                        </h4>
+                        
+                        <p className="text-xs text-[#c4c5d9] leading-relaxed">
+                          Only Auth is a 100% open-source, local-first product built on transparency, safety, and mutual trust. We don't track you, run servers, or monetize your data. 
+                        </p>
+                        <p className="text-xs text-[#c4c5d9] leading-relaxed italic">
+                          "Every GitHub star, feedback contribution, or small donation keeps privacy accessible to everyone. Have you supported Only Auth by starring the repository or contributing to our community?"
+                        </p>
+
+                        <div className="flex gap-2.5 mt-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSettings(prev => ({ ...prev, githubContributor: true }));
+                            }}
+                            className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
+                              settings.githubContributor 
+                                ? 'bg-green-500/10 border border-green-500/30 text-green-400 cursor-default' 
+                                : 'bg-[#00dce5] hover:opacity-95 text-black hover:scale-[1.02]'
+                            }`}
+                          >
+                            {settings.githubContributor ? '✓ Unlocked Premium!' : 'Yes, I have starred / donated!'}
+                          </button>
+                          
+                          <button
+                            type="button"
+                            onClick={() => {
+                              window.open('https://github.com/OnlyXianzo/Only-Auth', '_blank');
+                            }}
+                            className="px-4 py-2 rounded-xl border border-white/10 hover:border-white/20 text-xs text-[#c4c5d9] hover:text-white transition-all hover:bg-white/5"
+                          >
+                            Not yet (Open Repository ↗)
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>

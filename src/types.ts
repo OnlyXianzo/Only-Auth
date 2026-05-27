@@ -25,4 +25,9 @@ export interface AppSettings {
   appLockEnabled: boolean;
   appLockMethod: 'biometrics' | 'pin' | 'passphrase';
   pinAttempts: number;
+  forceSearchOnStartup: boolean;
+  devAccountName: string;
+  devAccountTag: string;
+  githubContributor: boolean;
 }
+
