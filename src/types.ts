@@ -12,6 +12,12 @@ export interface Account {
   createdAt: string;
 }
 
+export interface HiddenVaultSettings {
+  isEnabled: boolean;
+  hash: string;                  // SHA-256 hash or blind state hash of hidden vault PIN/passcode
+  method: 'pin' | 'biometrics' | 'passphrase';
+}
+
 export interface AppSettings {
   passphraseHash: string;       // SHA-256 of passphrase
   masterKeyHash: string;        // SHA-256 of 256-bit master key
@@ -29,5 +35,7 @@ export interface AppSettings {
   devAccountName: string;
   devAccountTag: string;
   githubContributor: boolean;
+  hiddenVaultSettings: HiddenVaultSettings;
 }
+
 

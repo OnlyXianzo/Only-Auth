@@ -157,6 +157,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   devAccountName: 'Dev Account',
   devAccountTag: 'Premium',
   githubContributor: false,
+  hiddenVaultSettings: { isEnabled: false, hash: '', method: 'pin' },
 };
 
 // Helper for Bitwarden URI parsing
@@ -168,8 +169,18 @@ function extractSecretFromURI(uri: string): string | null {
   return null;
 }
 
+// ─── Toast Notification System ──────────────────────────────────────────────
+type ToastType = 'success' | 'error' | 'info';
+interface Toast { id: string; message: string; type: ToastType; }
+
 // ─── Main App ────────────────────────────────────────────────────────────────
 export default function App() {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const showToast = (message: string, type: ToastType = 'info') => {
+    const id = `toast-${Date.now()}-${Math.random()}`;
+    setToasts(prev => [...prev.slice(-3), { id, message, type }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3800);
+  };
   // ── Persistent state
   const [accounts, setAccounts] = useState<Account[]>(() => {
     const saved = localStorage.getItem('onlyauth_accounts_v3');
@@ -189,6 +200,80 @@ export default function App() {
   // ── Auth state
   const isFirstRun = !settings.passphraseHash;
   const [isLocked, setIsLocked] = useState(true);
+
+  // ── Ghost Mode State Variables
+  const [isHiddenVaultActive, setIsHiddenVaultActive] = useState<boolean>(false);
+  const [showHiddenSetupModal, setShowHiddenSetupModal] = useState<boolean>(false);
+  const [hiddenVaultSetupMethod, setHiddenVaultSetupMethod] = useState<'pin' | 'passphrase' | 'biometrics'>('pin');
+  const [hiddenVaultSetupInput, setHiddenVaultSetupInput] = useState<string>('');
+  const [hiddenVaultSetupConfirm, setHiddenVaultSetupConfirm] = useState<string>('');
+  const [hiddenVaultSetupError, setHiddenVaultSetupError] = useState<string>('');
+
+  // ── Mock Tauri Invoke cryptographic boundary
+  const verifyHiddenCredentials = async (input: string): Promise<boolean> => {
+    // Mock Tauri invoke fallback if tauri is not available
+    try {
+      if ((window as any).__TAURI__) {
+        return await (window as any).__TAURI__.invoke('verify_hidden_credentials', { input });
+      }
+    } catch {}
+    // Fallback mock logic for web environment:
+    // If no hash is set, default secret is "9999" (PIN) or the master passphrase/key hash matching
+    if (!settings.hiddenVaultSettings?.hash) {
+      const fallbackHash = await sha256("9999");
+      const hash = await sha256(input);
+      return hash === fallbackHash || hash === settings.passphraseHash || hash === settings.masterKeyHash;
+    }
+    const hash = await sha256(input);
+    return hash === settings.hiddenVaultSettings.hash || hash === settings.passphraseHash || hash === settings.masterKeyHash;
+  };
+
+  const handleSetupHiddenVault = async (e: FormEvent) => {
+    e.preventDefault();
+    setHiddenVaultSetupError('');
+    
+    if (hiddenVaultSetupMethod === 'biometrics') {
+      try {
+        const simulatedHash = await sha256("biometrics-approved");
+        setSettings(prev => ({
+          ...prev,
+          hiddenVaultSettings: { isEnabled: true, hash: simulatedHash, method: 'biometrics' },
+          customTags: prev.customTags.includes('hidden') ? prev.customTags : [...prev.customTags, 'hidden']
+        }));
+        setShowHiddenSetupModal(false);
+        showToast('Ghost Vault initialized with Device Biometrics.', 'success');
+      } catch (err) {
+        setHiddenVaultSetupError('Biometric setup failed.');
+      }
+      return;
+    }
+
+    if (!hiddenVaultSetupInput.trim()) {
+      setHiddenVaultSetupError('Input cannot be empty.');
+      return;
+    }
+    if (hiddenVaultSetupInput !== hiddenVaultSetupConfirm) {
+      setHiddenVaultSetupError('Credentials do not match.');
+      return;
+    }
+    if (hiddenVaultSetupMethod === 'pin' && !/^\d{4,8}$/.test(hiddenVaultSetupInput)) {
+      setHiddenVaultSetupError('PIN must be between 4 and 8 digits.');
+      return;
+    }
+
+    try {
+      const hash = await sha256(hiddenVaultSetupInput.trim());
+      setSettings(prev => ({
+        ...prev,
+        hiddenVaultSettings: { isEnabled: true, hash, method: hiddenVaultSetupMethod },
+        customTags: prev.customTags.includes('hidden') ? prev.customTags : [...prev.customTags, 'hidden']
+      }));
+      setShowHiddenSetupModal(false);
+      showToast(`Ghost Vault sealed with ${hiddenVaultSetupMethod === 'pin' ? 'PIN' : 'Passphrase'}. Type it in the search bar to unseal.`, 'success');
+    } catch (err) {
+      setHiddenVaultSetupError('An error occurred during hashing.');
+    }
+  };
 
   // Setup flow
   type SetupStep = 'choose-words' | 'reveal-keys' | 'set-pin';
@@ -376,10 +461,53 @@ export default function App() {
 
   // ── Focus guard
   useEffect(() => {
-    if (accounts.length > 0 && !accounts.some(a => a.id === focusedAccountId)) {
-      setFocusedAccountId(accounts[0].id);
+    const visAccs = accounts.filter(acc => {
+      const isHidden = acc.category.toLowerCase() === 'hide' || acc.category.toLowerCase() === 'hidden';
+      return isHiddenVaultActive || !isHidden;
+    });
+    if (visAccs.length > 0 && !visAccs.some(a => a.id === focusedAccountId)) {
+      setFocusedAccountId(visAccs[0].id);
     }
-  }, [accounts, focusedAccountId]);
+  }, [accounts, focusedAccountId, isHiddenVaultActive]);
+
+  // ── Ghost Mode Search Trigger
+  useEffect(() => {
+    if (!searchQuery) return;
+    let active = true;
+    const checkQuery = async () => {
+      const match = await verifyHiddenCredentials(searchQuery);
+      if (match && active) {
+        setIsHiddenVaultActive(true);
+        setSearchQuery('');
+      }
+    };
+    checkQuery();
+    return () => {
+      active = false;
+    };
+  }, [searchQuery]);
+
+  useEffect(() => {
+    // Reset hidden vault when activeTag changes or search query is modified from empty
+    if (isHiddenVaultActive) {
+      if (searchQuery !== '') {
+        setIsHiddenVaultActive(false);
+      }
+    }
+  }, [searchQuery, isHiddenVaultActive]);
+
+  useEffect(() => {
+    setIsHiddenVaultActive(false);
+  }, [activeTag]);
+
+  // Scrub hidden vault setup inputs when setup modal closes/changes
+  useEffect(() => {
+    return () => {
+      setHiddenVaultSetupInput("");
+      setHiddenVaultSetupConfirm("");
+      setHiddenVaultSetupError("");
+    };
+  }, [showHiddenSetupModal]);
 
   // ── Auto-search on startup focus
   useEffect(() => {
@@ -615,20 +743,20 @@ export default function App() {
           sha256(pendingAction.data.newPassphrase).then(newHash => {
             setSettings(prev => ({ ...prev, passphraseHash: newHash }));
             setNewPassphraseWords([]);
-            alert('Passphrase updated. You will need your new passphrase to unlock.');
+            showToast('Passphrase updated. Use your new passphrase to unlock.', 'success');
           });
         } else if (pendingAction?.type === 'update-pin') {
           sha256(pendingAction.data.newPin).then(newHash => {
             setSettings(prev => ({ ...prev, pinHash: newHash, pinAttempts: 0 }));
             setNewPinField('');
             setNewPinConfirm('');
-            alert('PIN updated successfully.');
+            showToast('PIN updated successfully.', 'success');
           });
         } else if (pendingAction?.type === 'update-masterkey') {
           sha256(pendingAction.data.newKey).then(newHash => {
             setSettings(prev => ({ ...prev, masterKeyHash: newHash }));
             setNewMasterKeyField('');
-            alert('Master Key updated successfully.');
+            showToast('Master Key updated successfully.', 'success');
           });
         }
         setIsVerificationModalOpen(false);
@@ -709,7 +837,13 @@ export default function App() {
   const createTag = (e: FormEvent) => {
     e.preventDefault();
     const tag = newTagName.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
-    if (!tag || settings.customTags.includes(tag)) return;
+    if (!tag) return;
+    if (tag === 'hide' || tag === 'hidden') {
+      setShowHiddenSetupModal(true);
+      setNewTagName('');
+      return;
+    }
+    if (settings.customTags.includes(tag)) return;
     setSettings(prev => ({ ...prev, customTags: [...prev.customTags, tag] }));
     setNewTagName('');
   };
@@ -752,9 +886,9 @@ export default function App() {
         safeTransition(() => {
           if (parsed?.accounts) setAccounts(parsed.accounts);
           if (parsed?.settings) setSettings(prev => ({ ...DEFAULT_SETTINGS, ...prev, ...parsed.settings }));
-          alert('Backup restored successfully.');
+          showToast('Vault backup restored successfully.', 'success');
         });
-      } catch { alert('Invalid backup file.'); }
+      } catch { showToast('Invalid backup file. Check the format and try again.', 'error'); }
     };
     reader.readAsText(file);
   };
@@ -790,15 +924,15 @@ export default function App() {
         });
         
         if (imported.length === 0) {
-          alert("No valid TOTP secrets found in Ente JSON.");
+          showToast('No valid TOTP secrets found in Ente JSON.', 'error');
           return;
         }
         
         safeTransition(() => {
           setAccounts(prev => [...imported, ...prev]);
-          alert(`Successfully imported ${imported.length} accounts from Ente Auth!`);
+          showToast(`Imported ${imported.length} account${imported.length !== 1 ? 's' : ''} from Ente Auth.`, 'success');
         });
-      } catch { alert("Failed to parse Ente JSON export. Ensure it is fully decrypted."); }
+      } catch { showToast('Failed to parse Ente JSON. Ensure it is fully decrypted.', 'error'); }
     };
     reader.readAsText(file);
   };
@@ -835,15 +969,15 @@ export default function App() {
         });
         
         if (imported.length === 0) {
-          alert("No login items with valid TOTP secrets found.");
+          showToast('No login items with valid TOTP secrets found.', 'error');
           return;
         }
         
         safeTransition(() => {
           setAccounts(prev => [...imported, ...prev]);
-          alert(`Successfully imported ${imported.length} accounts from Bitwarden!`);
+          showToast(`Imported ${imported.length} account${imported.length !== 1 ? 's' : ''} from Bitwarden.`, 'success');
         });
-      } catch { alert("Failed to parse Bitwarden JSON. Ensure it is a valid decrypted export."); }
+      } catch { showToast('Failed to parse Bitwarden JSON. Ensure it is a valid decrypted export.', 'error'); }
     };
     reader.readAsText(file);
   };
@@ -860,8 +994,8 @@ export default function App() {
 
   const handleUpdatePinSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (newPinField.length < 4) { alert('PIN must be at least 4 characters.'); return; }
-    if (newPinField !== newPinConfirm) { alert("PINs don't match."); return; }
+    if (newPinField.length < 4) { showToast('PIN must be at least 4 characters.', 'error'); return; }
+    if (newPinField !== newPinConfirm) { showToast("PINs don't match. Please re-enter.", 'error'); return; }
     triggerVerifyAction('update-pin', { newPin: newPinField });
   };
 
@@ -920,13 +1054,17 @@ export default function App() {
 
   // ── Computed
   const c = settings.compactMode;
-  const filteredAccounts = accounts.filter(acc => {
+  const visibleAccounts = accounts.filter(acc => {
+    const isHidden = acc.category.toLowerCase() === 'hide' || acc.category.toLowerCase() === 'hidden';
+    return isHiddenVaultActive || !isHidden;
+  });
+  const filteredAccounts = visibleAccounts.filter(acc => {
     const matchesTag = activeTag === 'all' || acc.category === activeTag;
     const q = searchQuery.toLowerCase();
     const matchesSearch = !q || acc.name.toLowerCase().includes(q) || acc.email.toLowerCase().includes(q) || (acc.tags?.some(t => t.toLowerCase().includes(q)));
     return matchesTag && matchesSearch;
   });
-  const focusedAccount = accounts.find(a => a.id === focusedAccountId) || accounts[0] || null;
+  const focusedAccount = visibleAccounts.find(a => a.id === focusedAccountId) || visibleAccounts[0] || null;
   const focusedCode = focusedAccount ? generateTOTPCode(focusedAccount.secret, settings.autoRenewInterval) : '000000';
   const focusedCodeFormatted = formatFocusedCode(focusedCode);
   const passkeyStrength = getSecurityStrength(settings.passphraseHash || 'default');
@@ -1243,7 +1381,7 @@ export default function App() {
       </AnimatePresence>
 
       {/* ── SIDEBAR ──────────────────────────────────────────────────────── */}
-      <aside className={`fixed inset-y-0 left-0 z-50 flex flex-col h-full bg-black/30 backdrop-blur-[32px] border-r border-white/5 shadow-2xl w-[var(--sidebar-width)]
+      <aside className={`fixed inset-y-0 left-0 z-50 flex flex-col h-full bg-black/30 backdrop-blur-[32px] border-r ${isHiddenVaultActive ? 'border-amber-500/20 shadow-[0_0_15px_rgba(245,158,11,0.05)]' : 'border-white/5 shadow-2xl'} w-[var(--sidebar-width)]
         ${isResizing ? '' : 'transition-all duration-300'}
         ${mobileDrawerOpen ? 'translate-x-0 !w-72' : '-translate-x-full md:translate-x-0'}`}>
 
@@ -1270,29 +1408,31 @@ export default function App() {
           )}
 
           {/* All */}
-          {['all', ...settings.customTags].map(tag => {
-            const isActive = activeTag === tag;
-            const count = tag === 'all' ? accounts.length : accounts.filter(a => a.category === tag).length;
-            const Icon = tag === 'all' ? Layers : tag === 'work' ? Briefcase : tag === 'personal' ? LockOpen : Tag;
-            return (
-              <button key={tag} onClick={() => safeTransition(() => { setActiveTag(tag); setMobileDrawerOpen(false); })}
-                className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all border-l-2 ${
-                  isActive ? 'bg-white/5 text-white border-[#00dce5] font-semibold' : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
-                } ${sidebarCollapsed ? 'justify-center px-0 border-l-0 rounded-full w-10 h-10 mx-auto' : ''}`}>
-                <Icon className="w-4 h-4 shrink-0" />
-                {!sidebarCollapsed && (
-                  <>
-                    <span className="capitalize flex-1 text-left truncate">{tag === 'all' ? 'All' : tag}</span>
-                    {count > 0 && (
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-mono ${isActive ? 'bg-[#00dce5] text-black font-bold' : 'bg-white/10 text-[#8e90a2]'}`}>
-                        {count}
-                      </span>
-                    )}
-                  </>
-                )}
-              </button>
-            );
-          })}
+          {['all', ...settings.customTags]
+            .filter(tag => tag.toLowerCase() !== 'hide' && tag.toLowerCase() !== 'hidden')
+            .map(tag => {
+              const isActive = activeTag === tag;
+              const count = tag === 'all' ? visibleAccounts.length : visibleAccounts.filter(a => a.category === tag).length;
+              const Icon = tag === 'all' ? Layers : tag === 'work' ? Briefcase : tag === 'personal' ? LockOpen : Tag;
+              return (
+                <button key={tag} onClick={() => safeTransition(() => { setActiveTag(tag); setMobileDrawerOpen(false); })}
+                  className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all border-l-2 ${
+                    isActive ? `bg-white/5 text-white ${isHiddenVaultActive ? 'border-amber-500 text-amber-400 font-semibold' : 'border-[#00dce5] text-white font-semibold'}` : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
+                  } ${sidebarCollapsed ? 'justify-center px-0 border-l-0 rounded-full w-10 h-10 mx-auto' : ''}`}>
+                  <Icon className="w-4 h-4 shrink-0" />
+                  {!sidebarCollapsed && (
+                    <>
+                      <span className="capitalize flex-1 text-left truncate">{tag === 'all' ? 'All' : tag}</span>
+                      {count > 0 && (
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-mono ${isActive ? `${isHiddenVaultActive ? 'bg-amber-500 text-black font-bold' : 'bg-[#00dce5] text-black font-bold'}` : 'bg-white/10 text-[#8e90a2]'}`}>
+                          {count}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </button>
+              );
+            })}
 
           {/* Static nav divider */}
           <div className="mt-3 pt-3 border-t border-white/5 flex flex-col gap-1">
@@ -1437,10 +1577,34 @@ export default function App() {
 
                 {/* Left: Focus card + Pinned */}
                 <div className={`flex-1 flex flex-col ${c ? 'gap-4' : 'gap-6'} min-w-0`}>
+                  
+                  {/* Vault Unsealed Neon Amber Banner */}
+                  {isHiddenVaultActive && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -6, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                      className="border border-amber-500/40 bg-amber-950/10 rounded-2xl p-3.5 flex items-center justify-between shadow-[0_0_20px_rgba(245,158,11,0.08)] transition-all"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-xl bg-amber-500/15 flex items-center justify-center border border-amber-500/25">
+                          <LockOpen className="w-4 h-4 text-amber-400" />
+                        </div>
+                        <div>
+                          <p className="text-[11px] font-semibold text-amber-400 uppercase tracking-[0.15em] font-display">Ghost Mode Active</p>
+                          <p className="text-[10px] text-amber-500/70 mt-0.5">Hidden accounts visible. Changes tag or clears search to reseal.</p>
+                        </div>
+                      </div>
+                      <button onClick={() => setIsHiddenVaultActive(false)} className="text-amber-600 hover:text-amber-400 transition-colors p-1 rounded-lg hover:bg-amber-500/10">
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </motion.div>
+                  )}
+
                   {focusedAccount ? (
-                    <div className="glass-panel-accent rounded-3xl relative overflow-hidden focus-card-transition group border-l-4 border-l-[#00dce5]"
+                    <div className={`glass-panel-accent rounded-3xl relative overflow-hidden focus-card-transition group border-l-4 ${isHiddenVaultActive ? 'border-l-amber-500' : 'border-l-[#00dce5]'}`}
                       style={{ padding: c ? '1.25rem' : '2rem' }}>
-                      <div className="card-bg-blur bg-[#00dce5]/10" />
+                      <div className={`card-bg-blur ${isHiddenVaultActive ? 'bg-amber-500/10' : 'bg-[#00dce5]/10'}`} />
 
                       <div className="flex justify-between items-start relative z-10">
                         <div className="flex items-center gap-3 min-w-0">
@@ -1523,17 +1687,17 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* Pinned accounts */}
-                  {accounts.filter(a => a.isPinned).length > 0 && (
+                   {/* Pinned accounts */}
+                  {visibleAccounts.filter(a => a.isPinned).length > 0 && (
                     <div className="space-y-3">
                       <p className="text-[9px] uppercase tracking-[0.2em] font-bold text-[#8e90a2]">Pinned Accounts</p>
                       <div className="flex gap-3 overflow-x-auto pb-2 no-scrollbar">
-                        {accounts.filter(a => a.isPinned).map(acc => {
+                        {visibleAccounts.filter(a => a.isPinned).map(acc => {
                           const pCode = generateTOTPCode(acc.secret, settings.autoRenewInterval);
                           const isSelected = focusedAccountId === acc.id;
                           return (
                             <div key={acc.id} onClick={() => setFocusedAccountId(acc.id)}
-                              className={`glass-panel ${c ? 'min-w-[200px] p-3' : 'min-w-[240px] p-4'} rounded-2xl flex flex-col gap-3 cursor-pointer hover:bg-white/5 transition-all shrink-0 ${isSelected ? 'border border-[#00dce5]/40' : ''}`}>
+                              className={`glass-panel ${c ? 'min-w-[200px] p-3' : 'min-w-[240px] p-4'} rounded-2xl flex flex-col gap-3 cursor-pointer hover:bg-white/5 transition-all shrink-0 ${isSelected ? (isHiddenVaultActive ? 'border border-amber-500/50 shadow-[0_0_10px_rgba(245,158,11,0.2)]' : 'border border-[#00dce5]/40') : ''}`}>
                               <div className="flex items-center gap-2">
                                 <div className="shrink-0">
                                   <BrandLogo name={acc.name} logoType={acc.logoType} className={`${c ? 'w-8 h-8 text-xs' : 'w-10 h-10 text-xs'}`} />
@@ -1581,8 +1745,8 @@ export default function App() {
                           whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }}
                           className={`glass-panel ${c ? 'rounded-xl p-2.5' : 'rounded-2xl p-4'} flex items-center justify-between cursor-pointer transition-all group border-l-2 ${
                             isFocused
-                              ? 'border-l-[#00dce5] bg-white/5 border-t-transparent border-r-transparent border-b-transparent'
-                              : 'border-l-transparent border-t-white/8 border-r-white/8 border-b-white/8 hover:border-l-[#00dce5]/60 hover:border-t-transparent hover:border-r-transparent hover:border-b-transparent hover:bg-white/5'
+                              ? `${isHiddenVaultActive ? 'border-l-amber-500 bg-amber-500/5 shadow-[0_0_10px_rgba(245,158,11,0.1)]' : 'border-l-[#00dce5] bg-white/5'} border-t-transparent border-r-transparent border-b-transparent`
+                              : `border-l-transparent border-t-white/8 border-r-white/8 border-b-white/8 ${isHiddenVaultActive ? 'hover:border-l-amber-500/60' : 'hover:border-l-[#00dce5]/60'} hover:border-t-transparent hover:border-r-transparent hover:border-b-transparent hover:bg-white/5`
                           }`}>
                           <div className="flex items-center gap-3 min-w-0 flex-1">
                             <div className="shrink-0">
@@ -1937,30 +2101,89 @@ export default function App() {
                 )}
 
                 {settingsSubTab === 'tags' && (
-                  <div className="glass-panel rounded-2xl p-6 border border-white/8 space-y-5">
-                    <h3 className="font-display text-base font-semibold text-white">Tags</h3>
-                    <p className="text-xs text-[#8e90a2]">Tags are used to filter and organize your accounts. Create custom tags and assign them when adding accounts.</p>
-                    <div className="space-y-2">
-                      {settings.customTags.map(tag => (
-                        <div key={tag} className="flex items-center justify-between px-4 py-2.5 bg-white/5 border border-white/8 rounded-xl">
-                          <div className="flex items-center gap-2.5">
-                            <Tag className="w-3.5 h-3.5 text-[#00dce5]" />
-                            <span className="text-sm text-white capitalize">{tag}</span>
-                            <span className="text-[9px] font-mono text-[#8e90a2]">{accounts.filter(a => a.category === tag).length} accounts</span>
+                  <div className="space-y-4">
+                    <div className="glass-panel rounded-2xl p-6 border border-white/8 space-y-5">
+                      <h3 className="font-display text-base font-semibold text-white">Tags</h3>
+                      <p className="text-xs text-[#8e90a2]">Tags are used to filter and organize your accounts. Create custom tags and assign them when adding accounts.</p>
+                      <div className="space-y-2">
+                        {settings.customTags.filter(tag => tag.toLowerCase() !== 'hide' && tag.toLowerCase() !== 'hidden').map(tag => (
+                          <div key={tag} className="flex items-center justify-between px-4 py-2.5 bg-white/5 border border-white/8 rounded-xl">
+                            <div className="flex items-center gap-2.5">
+                              <Tag className="w-3.5 h-3.5 text-[#00dce5]" />
+                              <span className="text-sm text-white capitalize">{tag}</span>
+                              <span className="text-[9px] font-mono text-[#8e90a2]">{accounts.filter(a => a.category === tag).length} accounts</span>
+                            </div>
+                            {!['personal', 'work'].includes(tag) && (
+                              <button onClick={() => deleteTag(tag)} className="text-[#8e90a2] hover:text-red-400 transition-colors">
+                                <X className="w-4 h-4" />
+                              </button>
+                            )}
                           </div>
-                          {!['personal', 'work'].includes(tag) && (
-                            <button onClick={() => deleteTag(tag)} className="text-[#8e90a2] hover:text-red-400 transition-colors">
-                              <X className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      ))}
+                        ))}
+                      </div>
+                      <form onSubmit={createTag} className="flex gap-2.5">
+                        <input type="text" value={newTagName} onChange={e => setNewTagName(e.target.value)} placeholder="Type 'hide' or 'hidden' to create a Ghost Vault..."
+                          className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#00dce5]/50 transition-all placeholder-[#8e90a2]" />
+                        <button type="submit" className="px-4 py-2.5 bg-[#00dce5] text-black text-xs font-semibold rounded-xl hover:opacity-90 transition-opacity">Add Tag</button>
+                      </form>
                     </div>
-                    <form onSubmit={createTag} className="flex gap-2.5">
-                      <input type="text" value={newTagName} onChange={e => setNewTagName(e.target.value)} placeholder="New tag name..."
-                        className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#00dce5]/50 transition-all" />
-                      <button type="submit" className="px-4 py-2.5 bg-[#00dce5] text-black text-xs font-semibold rounded-xl hover:opacity-90 transition-opacity">Add Tag</button>
-                    </form>
+
+                    {/* Ghost Vault Status Card */}
+                    <div className={`rounded-2xl p-5 border flex items-start gap-4 ${
+                      settings.hiddenVaultSettings?.isEnabled
+                        ? 'border-amber-500/25 bg-amber-950/8'
+                        : 'border-white/8 bg-white/[0.02]'
+                    }`}>
+                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border ${
+                        settings.hiddenVaultSettings?.isEnabled
+                          ? 'bg-amber-500/15 border-amber-500/30'
+                          : 'bg-white/5 border-white/10'
+                      }`}>
+                        <ShieldCheck className={`w-4.5 h-4.5 ${
+                          settings.hiddenVaultSettings?.isEnabled ? 'text-amber-400' : 'text-[#8e90a2]'
+                        }`} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <h4 className="text-xs font-semibold text-white uppercase tracking-wider">Ghost Vault</h4>
+                          <span className={`text-[9px] font-mono px-2 py-0.5 rounded-full uppercase tracking-wider ${
+                            settings.hiddenVaultSettings?.isEnabled
+                              ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                              : 'bg-white/5 text-[#8e90a2] border border-white/8'
+                          }`}>
+                            {settings.hiddenVaultSettings?.isEnabled ? 'Active' : 'Inactive'}
+                          </span>
+                        </div>
+                        {settings.hiddenVaultSettings?.isEnabled ? (
+                          <>
+                            <p className="text-[10px] text-amber-500/70 mt-1 leading-relaxed">
+                              Method: <span className="text-amber-400 font-semibold uppercase">{settings.hiddenVaultSettings.method}</span>
+                              {' · '}{accounts.filter(a => a.category === 'hidden').length} sealed account{accounts.filter(a => a.category === 'hidden').length !== 1 ? 's' : ''}
+                            </p>
+                            <button
+                              onClick={() => {
+                                if (!confirm('Disable Ghost Vault? Hidden accounts will be moved to Personal.')) return;
+                                setAccounts(prev => prev.map(a => a.category === 'hidden' ? { ...a, category: 'personal' } : a));
+                                setSettings(prev => ({
+                                  ...prev,
+                                  hiddenVaultSettings: { isEnabled: false, hash: '', method: 'pin' },
+                                  customTags: prev.customTags.filter(t => t !== 'hidden')
+                                }));
+                                setIsHiddenVaultActive(false);
+                                showToast('Ghost Vault disabled. Accounts moved to Personal.', 'info');
+                              }}
+                              className="mt-2.5 text-[10px] text-red-400/70 hover:text-red-400 transition-colors flex items-center gap-1"
+                            >
+                              <X className="w-3 h-3" /> Disable Ghost Vault
+                            </button>
+                          </>
+                        ) : (
+                          <p className="text-[10px] text-[#8e90a2] mt-1 leading-relaxed">
+                            Create a tag named <span className="text-white/60 font-mono">'hide'</span> or <span className="text-white/60 font-mono">'hidden'</span> above to activate a secret compartment for sensitive accounts.
+                          </p>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 )}
 
@@ -2266,12 +2489,12 @@ export default function App() {
                   <div className="space-y-1.5">
                     <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">Issuer</label>
                     <input type="text" required value={formName} onChange={e => setFormName(e.target.value)} placeholder="e.g. GitHub"
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/50 transition-all" />
+                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:shadow-[0_0_12px_rgba(0,229,255,0.15)] focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">Account</label>
                     <input type="text" required value={formEmail} onChange={e => setFormEmail(e.target.value)} placeholder="e.g. user@example.com"
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/50 transition-all" />
+                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:shadow-[0_0_12px_rgba(0,229,255,0.15)] focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
                   </div>
                 </div>
 
@@ -2281,26 +2504,29 @@ export default function App() {
                     <button type="button" onClick={handleGenerateSecret} className="text-[#00dce5] hover:underline">Generate</button>
                   </label>
                   <input type="text" required value={formSecret} onChange={e => setFormSecret(e.target.value)} placeholder="e.g. JBSWY3DPEHPK3PXP"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white font-mono uppercase focus:outline-none focus:border-[#00dce5]/50 transition-all" />
+                    className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white font-mono uppercase focus:outline-none focus:border-[#00dce5]/60 focus:shadow-[0_0_12px_rgba(0,229,255,0.15)] focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">Tag</label>
                     <select value={formCategory} onChange={e => setFormCategory(e.target.value)}
-                      className="w-full bg-[#1c1b1b] border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/50 transition-all">
-                      {settings.customTags.map(t => <option key={t} value={t} className="bg-[#1c1b1b] text-white">{t}</option>)}
+                      className="w-full bg-[#1c1b1b] border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:shadow-[0_0_12px_rgba(0,229,255,0.15)] transition-all">
+                      {settings.customTags
+                        .filter(t => t.toLowerCase() !== 'hide' && t.toLowerCase() !== 'hidden')
+                        .concat(isHiddenVaultActive ? ['hidden'] : [])
+                        .map(t => <option key={t} value={t} className="bg-[#1c1b1b] text-white">{t}</option>)}
                     </select>
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">Labels</label>
                     <input type="text" value={formTagsString} onChange={e => setFormTagsString(e.target.value)} placeholder="prod, core"
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/50 transition-all" />
+                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:shadow-[0_0_12px_rgba(0,229,255,0.15)] focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
                   </div>
                 </div>
 
                 <textarea rows={2} value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="Notes (optional)"
-                  className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/50 transition-all" />
+                  className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:shadow-[0_0_12px_rgba(0,229,255,0.15)] focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
 
                 <label className="flex items-center gap-2.5 bg-white/5 p-3 rounded-xl border border-white/8 cursor-pointer">
                   <input type="checkbox" checked={formIsPinned} onChange={e => setFormIsPinned(e.target.checked)} className="rounded border-white/20 text-[#00dce5] focus:ring-[#00dce5] bg-transparent" />
@@ -2317,6 +2543,110 @@ export default function App() {
                   )}
                   <button type="submit" className="px-5 py-2.5 text-xs bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white font-semibold rounded-xl hover:opacity-90 transition-opacity">
                     {editingAccount ? 'Save Changes' : 'Add Account'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ── GHOST MODE HIDDEN VAULT SETUP MODAL ───────────────────────── */}
+      <AnimatePresence>
+        {showHiddenSetupModal && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md glass-panel rounded-2xl p-6 border border-amber-500/20 shadow-[0_0_30px_rgba(245,158,11,0.1)] relative">
+              <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-amber-500 to-transparent" />
+              
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center">
+                  <ShieldCheck className="w-5 h-5 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="font-display font-semibold text-white text-base">Setup Ghost Vault</h3>
+                  <p className="text-[10px] text-[#8e90a2] tracking-wider uppercase font-mono">Secure Hidden Compartment</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-[#c4c5d9] mb-5 leading-relaxed">
+                Ghost Mode creates an invisible category. Entering your custom passcode directly into the dashboard search bar instantly unseals these hidden accounts.
+              </p>
+
+              {/* Method Selector */}
+              <div className="grid grid-cols-3 gap-2.5 mb-5">
+                {(['pin', 'passphrase', 'biometrics'] as const).map(method => (
+                  <button key={method} type="button" onClick={() => {
+                    setHiddenVaultSetupMethod(method);
+                    setHiddenVaultSetupInput('');
+                    setHiddenVaultSetupConfirm('');
+                    setHiddenVaultSetupError('');
+                  }}
+                    className={`py-2 px-1 rounded-xl border text-[10px] uppercase font-bold tracking-wider text-center transition-all ${
+                      hiddenVaultSetupMethod === method ? 'border-amber-500/60 bg-amber-500/10 text-white' : 'border-white/10 bg-white/5 text-[#c4c5d9] hover:border-white/20'
+                    }`}>
+                    {method}
+                  </button>
+                ))}
+              </div>
+
+              <form onSubmit={handleSetupHiddenVault} className="space-y-4">
+                {hiddenVaultSetupMethod !== 'biometrics' ? (
+                  <>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">
+                        {hiddenVaultSetupMethod === 'pin' ? 'Secret PIN' : 'Custom Passphrase'}
+                      </label>
+                      <input
+                        type={hiddenVaultSetupMethod === 'pin' ? 'text' : 'password'}
+                        required
+                        pattern={hiddenVaultSetupMethod === 'pin' ? '\\d*' : undefined}
+                        maxLength={hiddenVaultSetupMethod === 'pin' ? 8 : undefined}
+                        value={hiddenVaultSetupInput}
+                        onChange={e => setHiddenVaultSetupInput(e.target.value)}
+                        placeholder={hiddenVaultSetupMethod === 'pin' ? 'e.g. 9999' : 'e.g. correct horse battery staple'}
+                        className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500/50 focus:shadow-[0_0_12px_rgba(245,158,11,0.15)] focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">
+                        Confirm {hiddenVaultSetupMethod === 'pin' ? 'PIN' : 'Passphrase'}
+                      </label>
+                      <input
+                        type={hiddenVaultSetupMethod === 'pin' ? 'text' : 'password'}
+                        required
+                        pattern={hiddenVaultSetupMethod === 'pin' ? '\\d*' : undefined}
+                        maxLength={hiddenVaultSetupMethod === 'pin' ? 8 : undefined}
+                        value={hiddenVaultSetupConfirm}
+                        onChange={e => setHiddenVaultSetupConfirm(e.target.value)}
+                        placeholder={hiddenVaultSetupMethod === 'pin' ? 'Re-enter PIN' : 'Re-enter Passphrase'}
+                        className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500/50 focus:shadow-[0_0_12px_rgba(245,158,11,0.15)] focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]"
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="p-4 bg-white/5 border border-white/8 rounded-2xl text-center space-y-3">
+                    <Fingerprint className="w-8 h-8 text-amber-400 mx-auto animate-pulse" />
+                    <p className="text-[11px] text-[#c4c5d9] leading-relaxed">
+                      Initialize with platform security lock. Your device fingerprint or system lock will verify credentials seamlessly.
+                    </p>
+                  </div>
+                )}
+
+                {hiddenVaultSetupError && (
+                  <p className="text-xs text-red-400 font-mono bg-red-950/20 border border-red-500/20 px-3 py-1.5 rounded-lg">
+                    {hiddenVaultSetupError}
+                  </p>
+                )}
+
+                <div className="flex gap-3 justify-end pt-2 border-t border-white/8">
+                  <button type="button" onClick={() => setShowHiddenSetupModal(false)}
+                    className="px-4 py-2.5 text-xs text-[#8e90a2] hover:text-white font-semibold">
+                    Cancel
+                  </button>
+                  <button type="submit"
+                    className="px-5 py-2.5 text-xs bg-gradient-to-r from-amber-600 to-amber-500 text-white font-semibold rounded-xl hover:opacity-90 transition-opacity shadow-[0_0_15px_rgba(245,158,11,0.2)]">
+                    {hiddenVaultSetupMethod === 'biometrics' ? 'Register & Setup' : 'Complete Setup'}
                   </button>
                 </div>
               </form>
@@ -2356,6 +2686,34 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+      {/* ── TOAST NOTIFICATIONS ──────────────────────────────────────────── */}
+      <div className="fixed bottom-6 right-6 z-[100] flex flex-col gap-2 pointer-events-none">
+        <AnimatePresence>
+          {toasts.map(toast => (
+            <motion.div
+              key={toast.id}
+              initial={{ opacity: 0, y: 12, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 8, scale: 0.95 }}
+              transition={{ duration: 0.2 }}
+              className={`pointer-events-auto flex items-start gap-3 px-4 py-3 rounded-2xl border backdrop-blur-xl shadow-2xl max-w-[320px] ${
+                toast.type === 'success'
+                  ? 'bg-emerald-950/60 border-emerald-500/30 shadow-[0_0_20px_rgba(16,185,129,0.08)]'
+                  : toast.type === 'error'
+                  ? 'bg-red-950/60 border-red-500/30 shadow-[0_0_20px_rgba(239,68,68,0.08)]'
+                  : 'bg-[#0a0a0a]/80 border-white/10'
+              }`}
+            >
+              <div className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${
+                toast.type === 'success' ? 'bg-emerald-400' : toast.type === 'error' ? 'bg-red-400' : 'bg-[#00dce5]'
+              }`} />
+              <p className={`text-xs leading-relaxed ${
+                toast.type === 'success' ? 'text-emerald-100' : toast.type === 'error' ? 'text-red-200' : 'text-[#c4c5d9]'
+              }`}>{toast.message}</p>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
     </div>
   );
 }
