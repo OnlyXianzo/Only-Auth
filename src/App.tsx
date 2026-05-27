@@ -14,6 +14,7 @@ import {
   formatCode, formatFocusedCode,
   SERVICE_COLORS, getSecurityStrength,
   generateBatchTOTP, validateBase32, generateNewSecret,
+  loadVaultData, saveVaultData,
   BatchInput
 } from './utils';
 
@@ -184,11 +185,8 @@ export default function App() {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3800);
   };
   // ── Persistent state
-  const [accounts, setAccounts] = useState<Account[]>(() => {
-    const saved = localStorage.getItem('onlyauth_accounts_v3');
-    if (saved) { try { const p = JSON.parse(saved); if (Array.isArray(p)) return p; } catch {} }
-    return [];
-  });
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [isAccountsLoaded, setIsAccountsLoaded] = useState(false);
 
   const [settings, setSettings] = useState<AppSettings>(() => {
     const saved = localStorage.getItem('onlyauth_settings_v3');
@@ -196,7 +194,20 @@ export default function App() {
     return DEFAULT_SETTINGS;
   });
 
-  useEffect(() => { localStorage.setItem('onlyauth_accounts_v3', JSON.stringify(accounts)); }, [accounts]);
+  useEffect(() => {
+    const bootData = async () => {
+      const saved = await loadVaultData();
+      setAccounts(saved);
+      setIsAccountsLoaded(true);
+    };
+    bootData();
+  }, []);
+
+  useEffect(() => { 
+    if (isAccountsLoaded) {
+      saveVaultData(accounts);
+    }
+  }, [accounts, isAccountsLoaded]);
   useEffect(() => { localStorage.setItem('onlyauth_settings_v3', JSON.stringify(settings)); }, [settings]);
 
   // ── Auth state
@@ -802,10 +813,12 @@ export default function App() {
     const parsedTags = formTagsString.split(',').map(t => t.trim()).filter(Boolean);
     const sanitizedSecret = formSecret.trim().toUpperCase();
     if (editingAccount) {
-      setAccounts(prev => prev.map(acc => acc.id === editingAccount.id
+      const updated = accounts.map(acc => acc.id === editingAccount.id
         ? { ...acc, name: formName, email: formEmail, secret: sanitizedSecret, notes: formNotes, category: formCategory, isPinned: formIsPinned, logoType: formLogoType, tags: parsedTags }
         : acc
-      ));
+      );
+      setAccounts(updated);
+      saveVaultData(updated);
     } else {
       const newAcc: Account = {
         id: `acc-${Date.now()}`, name: formName, email: formEmail, secret: sanitizedSecret,
@@ -813,8 +826,10 @@ export default function App() {
         isPinned: formIsPinned, logoType: formLogoType, tags: parsedTags,
         createdAt: new Date().toISOString()
       };
-      setAccounts(prev => [newAcc, ...prev]);
+      const updated = [newAcc, ...accounts];
+      setAccounts(updated);
       setFocusedAccountId(newAcc.id);
+      saveVaultData(updated);
     }
     setIsAddModalOpen(false);
     setEditingAccount(null);

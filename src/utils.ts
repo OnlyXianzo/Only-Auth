@@ -34,6 +34,25 @@ export async function generateNewSecret(): Promise<string> {
   }
 }
 
+export async function loadVaultData(): Promise<Account[]> {
+  try {
+    return await invoke<Account[]>('load_vault_data');
+  } catch (e) {
+    console.error('Failed to load vault data:', e);
+    return [];
+  }
+}
+
+export async function saveVaultData(accounts: Account[]): Promise<boolean> {
+  try {
+    await invoke('save_vault_data', { accounts });
+    return true;
+  } catch (e) {
+    console.error('Failed to save vault data:', e);
+    return false;
+  }
+}
+
 /**
  * Helper to split a 6-digit code with space or bullet like "552 109"
  */
