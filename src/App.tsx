@@ -641,14 +641,15 @@ export default function App() {
 
   const saveAccountConfirmed = () => safeTransition(() => {
     const parsedTags = formTagsString.split(',').map(t => t.trim()).filter(Boolean);
+    const sanitizedSecret = formSecret.trim().toUpperCase();
     if (editingAccount) {
       setAccounts(prev => prev.map(acc => acc.id === editingAccount.id
-        ? { ...acc, name: formName, email: formEmail, secret: formSecret, notes: formNotes, category: formCategory, isPinned: formIsPinned, logoType: formLogoType, tags: parsedTags }
+        ? { ...acc, name: formName, email: formEmail, secret: sanitizedSecret, notes: formNotes, category: formCategory, isPinned: formIsPinned, logoType: formLogoType, tags: parsedTags }
         : acc
       ));
     } else {
       const newAcc: Account = {
-        id: `acc-${Date.now()}`, name: formName, email: formEmail, secret: formSecret,
+        id: `acc-${Date.now()}`, name: formName, email: formEmail, secret: sanitizedSecret,
         notes: formNotes || `2FA account for ${formName}`, category: formCategory,
         isPinned: formIsPinned, logoType: formLogoType, tags: parsedTags,
         createdAt: new Date().toISOString()
@@ -1311,34 +1312,25 @@ export default function App() {
               );
             })()}
 
-            {/* Import / Export sidebar shortcuts - Placed immediately after Security */}
-            {!sidebarCollapsed ? (
-              <div className="pl-4 flex flex-col gap-0.5 mt-0.5 border-l border-white/5 ml-4">
-                <button onClick={() => safeTransition(() => { setActiveTag('settings'); setSettingsSubTab('import-export'); setMobileDrawerOpen(false); })}
-                  className="flex items-center gap-2 py-1.5 text-[11px] text-[#c4c5d9] hover:text-[#00dce5] transition-colors text-left font-medium">
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>Import</span>
-                </button>
-                <button onClick={() => safeTransition(() => { setActiveTag('settings'); setSettingsSubTab('import-export'); setMobileDrawerOpen(false); })}
-                  className="flex items-center gap-2 py-1.5 text-[11px] text-[#c4c5d9] hover:text-[#00dce5] transition-colors text-left font-medium">
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Export</span>
-                </button>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-1 items-center mt-1">
-                <button onClick={() => safeTransition(() => { setActiveTag('settings'); setSettingsSubTab('import-export'); setMobileDrawerOpen(false); })}
-                  title="Import"
-                  className="w-8 h-8 rounded-full hover:bg-white/5 flex items-center justify-center text-[#c4c5d9] hover:text-[#00dce5]">
-                  <Upload className="w-3.5 h-3.5" />
-                </button>
-                <button onClick={() => safeTransition(() => { setActiveTag('settings'); setSettingsSubTab('import-export'); setMobileDrawerOpen(false); })}
-                  title="Export"
-                  className="w-8 h-8 rounded-full hover:bg-white/5 flex items-center justify-center text-[#c4c5d9] hover:text-[#00dce5]">
-                  <Download className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )}
+            {/* Import - Top-level sibling button */}
+            <button onClick={() => safeTransition(() => { setActiveTag('settings'); setSettingsSubTab('import-export'); setMobileDrawerOpen(false); })}
+              className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all border-l-2 ${
+                activeTag === 'settings' && settingsSubTab === 'import-export' ? 'bg-white/5 text-white border-[#00dce5] font-semibold' : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
+              } ${sidebarCollapsed ? 'justify-center px-0 border-l-0 rounded-full w-10 h-10 mx-auto' : ''}`}
+              title={sidebarCollapsed ? "Import" : undefined}>
+              <Upload className="w-4 h-4 shrink-0" />
+              {!sidebarCollapsed && <span>Import</span>}
+            </button>
+
+            {/* Export - Top-level sibling button */}
+            <button onClick={() => safeTransition(() => { setActiveTag('settings'); setSettingsSubTab('import-export'); setMobileDrawerOpen(false); })}
+              className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all border-l-2 ${
+                activeTag === 'settings' && settingsSubTab === 'import-export' ? 'bg-white/5 text-white border-[#00dce5] font-semibold' : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
+              } ${sidebarCollapsed ? 'justify-center px-0 border-l-0 rounded-full w-10 h-10 mx-auto' : ''}`}
+              title={sidebarCollapsed ? "Export" : undefined}>
+              <Download className="w-4 h-4 shrink-0" />
+              {!sidebarCollapsed && <span>Export</span>}
+            </button>
 
             {/* Settings & Support */}
             {sidebarTabs.slice(1).map(tab => {
@@ -1478,20 +1470,29 @@ export default function App() {
 
                       {/* Code display */}
                       <div className={`flex flex-col items-center justify-center relative z-10 ${c ? 'py-5' : 'py-8'}`}>
-                        <motion.div key={focusedCode} initial={{ opacity: 0.7, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }}
-                          onClick={() => handleCopyCode(focusedAccount.id, focusedCode)}
-                          className={`font-display font-bold text-white flex items-center gap-4 tracking-[0.1em] cursor-pointer hover:text-[#00dce5] transition-colors select-none ${c ? 'text-4xl md:text-5xl' : 'text-5xl md:text-6xl'}`}
-                          title="Click to copy">
-                          <span>{focusedCodeFormatted.first}</span>
-                          <span className="w-2.5 h-2.5 bg-white/20 rounded-full shrink-0" />
-                          <span>{focusedCodeFormatted.second}</span>
-                        </motion.div>
+                        {focusedAccount.secret && focusedAccount.secret.trim() !== "" ? (
+                          <>
+                            <motion.div key={focusedCode} initial={{ opacity: 0.7, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }}
+                              onClick={() => handleCopyCode(focusedAccount.id, focusedCode)}
+                              className={`font-display font-bold text-white flex items-center gap-4 tracking-[0.1em] cursor-pointer hover:text-[#00dce5] transition-colors select-none ${c ? 'text-4xl md:text-5xl' : 'text-5xl md:text-6xl'}`}
+                              title="Click to copy">
+                              <span>{focusedCodeFormatted.first}</span>
+                              <span className="w-2.5 h-2.5 bg-white/20 rounded-full shrink-0" />
+                              <span>{focusedCodeFormatted.second}</span>
+                            </motion.div>
 
-                        {copyFeedbackMap[focusedAccount.id] && (
-                          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-                            className="mt-3 text-xs font-semibold text-[#00dce5] flex items-center gap-1.5 bg-[#00dce5]/10 px-3 py-1 rounded-full border border-[#00dce5]/20">
-                            <Check className="w-3.5 h-3.5" /> Copied!
-                          </motion.div>
+                            {copyFeedbackMap[focusedAccount.id] && (
+                              <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+                                className="mt-3 text-xs font-semibold text-[#00dce5] flex items-center gap-1.5 bg-[#00dce5]/10 px-3 py-1 rounded-full border border-[#00dce5]/20">
+                                <Check className="w-3.5 h-3.5" /> Copied!
+                              </motion.div>
+                            )}
+                          </>
+                        ) : (
+                          <div className="flex flex-col items-center gap-2 text-amber-500 py-2 select-none">
+                            <AlertTriangle className="w-8 h-8 text-amber-500 animate-pulse" />
+                            <span className="text-sm font-semibold tracking-wider uppercase font-display">No Secret Set</span>
+                          </div>
                         )}
                       </div>
 
@@ -1502,10 +1503,12 @@ export default function App() {
                         )}
                         <div className="flex items-center justify-between text-xs">
                           <span className="text-[#8e90a2]">Refreshes in <span className="font-mono text-white font-semibold">{secondsRemaining}s</span></span>
-                          <button onClick={() => handleCopyCode(focusedAccount.id, focusedCode)}
-                            className="flex items-center gap-1 text-[#00dce5] hover:text-white transition-colors">
-                            <Copy className="w-3.5 h-3.5" /> <span>Copy Code</span>
-                          </button>
+                          {focusedAccount.secret && focusedAccount.secret.trim() !== "" && (
+                            <button onClick={() => handleCopyCode(focusedAccount.id, focusedCode)}
+                              className="flex items-center gap-1 text-[#00dce5] hover:text-white transition-colors">
+                              <Copy className="w-3.5 h-3.5" /> <span>Copy Code</span>
+                            </button>
+                          )}
                         </div>
                         <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
                           <div className="h-full progress-bar-inner bg-[#00dce5]" style={{ width: `${(secondsRemaining / (settings.autoRenewInterval || 60)) * 100}%` }} />
@@ -1538,11 +1541,22 @@ export default function App() {
                                 <h4 className="font-semibold text-white text-xs truncate">{acc.name}</h4>
                               </div>
                               <div className="flex justify-between items-center">
-                                <span className={`font-mono font-semibold text-white ${c ? 'text-base' : 'text-xl'}`}>{formatCode(pCode)}</span>
-                                <button onClick={e => { e.stopPropagation(); handleCopyCode(acc.id, pCode); }}
-                                  className="w-7 h-7 rounded-lg bg-white/5 flex items-center justify-center text-[#c4c5d9] hover:text-[#00dce5]">
-                                  {copyFeedbackMap[acc.id] ? <Check className="w-3.5 h-3.5 text-[#00dce5]" /> : <Copy className="w-3 h-3" />}
-                                </button>
+                                {acc.secret && acc.secret.trim() !== "" ? (
+                                  <>
+                                    <span className={`font-mono font-semibold text-white ${c ? 'text-base' : 'text-xl'}`}>{formatCode(pCode)}</span>
+                                    <button onClick={e => { e.stopPropagation(); handleCopyCode(acc.id, pCode); }}
+                                      className="w-7 h-7 rounded-lg bg-white/5 flex items-center justify-center text-[#c4c5d9] hover:text-[#00dce5]">
+                                      {copyFeedbackMap[acc.id] ? <Check className="w-3.5 h-3.5 text-[#00dce5]" /> : <Copy className="w-3 h-3" />}
+                                    </button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className="text-xs font-semibold text-amber-500 uppercase tracking-wider font-display">No Secret</span>
+                                    <div className="w-7 h-7 flex items-center justify-center text-amber-500/60">
+                                      <AlertTriangle className="w-4 h-4" />
+                                    </div>
+                                  </>
+                                )}
                               </div>
                             </div>
                           );
@@ -1582,12 +1596,19 @@ export default function App() {
                               {!c && <p className="text-[10px] text-[#8e90a2] truncate mt-0.5">{acc.email}</p>}
                             </div>
                           </div>
-                          <div className="code-hover-target ml-3 shrink-0" onClick={e => { e.stopPropagation(); handleCopyCode(acc.id, aCode); }}>
-                            <span className={`original-code font-mono font-semibold text-white group-hover:text-[#00dce5] transition-colors ${c ? 'text-xs' : 'text-sm'}`}>{formatCode(aCode)}</span>
-                            <span className="hover-text text-[9px] text-[#00dce5] font-bold font-sans uppercase">
-                              {copyFeedbackMap[acc.id] ? '✓' : 'COPY'}
-                            </span>
-                          </div>
+                          {acc.secret && acc.secret.trim() !== "" ? (
+                            <div className="code-hover-target ml-3 shrink-0" onClick={e => { e.stopPropagation(); handleCopyCode(acc.id, aCode); }}>
+                              <span className={`original-code font-mono font-semibold text-white group-hover:text-[#00dce5] transition-colors ${c ? 'text-xs' : 'text-sm'}`}>{formatCode(aCode)}</span>
+                              <span className="hover-text text-[9px] text-[#00dce5] font-bold font-sans uppercase">
+                                {copyFeedbackMap[acc.id] ? '✓' : 'COPY'}
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5 ml-3 shrink-0 text-amber-500 font-semibold" onClick={e => e.stopPropagation()}>
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                              <span className="text-[10px] uppercase tracking-wider font-display font-semibold">Missing Secret</span>
+                            </div>
+                          )}
                         </motion.div>
                       );
                     }) : (
@@ -1683,7 +1704,7 @@ export default function App() {
             {activeTag === 'settings' && (
               <motion.div key="settings" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="max-w-3xl space-y-6 animate-fade-in">
                 {/* Sub-tabs */}
-                <div className="flex gap-1 bg-white/5 rounded-xl p-1 flex-wrap">
+                <div className="flex gap-1 bg-white/5 rounded-xl p-1 overflow-x-auto whitespace-nowrap no-scrollbar select-none">
                   {([
                     { value: 'layout', label: 'Layout' },
                     { value: 'profile', label: 'Profile & Perks' },
