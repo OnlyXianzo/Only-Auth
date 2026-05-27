@@ -366,6 +366,7 @@ export default function App() {
   const [formName, setFormName] = useState('');
   const [formEmail, setFormEmail] = useState('');
   const [formSecret, setFormSecret] = useState('');
+  const [showSecret, setShowSecret] = useState(false);
   const [formNotes, setFormNotes] = useState('');
   const [formCategory, setFormCategory] = useState('personal');
   const [formIsPinned, setFormIsPinned] = useState(false);
@@ -729,7 +730,7 @@ export default function App() {
   // ── Account CRUD
   const openAddModal = () => safeTransition(() => {
     setEditingAccount(null);
-    setFormName(''); setFormEmail(''); setFormSecret('');
+    setFormName(''); setFormEmail(''); setFormSecret(''); setShowSecret(false);
     setFormNotes(''); setFormCategory(activeTag === 'all' ? 'personal' : activeTag);
     setFormIsPinned(false); setFormLogoType('custom'); setFormTagsString('');
     setShowIconPicker(false);
@@ -738,7 +739,7 @@ export default function App() {
 
   const openEditModal = (account: Account) => safeTransition(() => {
     setEditingAccount(account);
-    setFormName(account.name); setFormEmail(account.email); setFormSecret(account.secret);
+    setFormName(account.name); setFormEmail(account.email); setFormSecret(account.secret); setShowSecret(false);
     setFormNotes(account.notes); setFormCategory(account.category);
     setFormIsPinned(account.isPinned); setFormLogoType(account.logoType);
     setFormTagsString(account.tags?.join(', ') || '');
@@ -2533,8 +2534,13 @@ export default function App() {
                     <span>Secret</span>
                     <button type="button" onClick={handleGenerateSecret} className="text-[#00dce5] hover:underline">Generate</button>
                   </label>
-                  <input type="text" required value={formSecret} onChange={e => setFormSecret(e.target.value)} placeholder="e.g. JBSWY3DPEHPK3PXP"
-                    className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white font-mono uppercase focus:outline-none focus:border-[#00dce5]/60 focus:shadow-[0_0_12px_rgba(0,229,255,0.15)] focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
+                  <div className="relative">
+                    <input type={showSecret ? "text" : "password"} required value={formSecret} onChange={e => setFormSecret(e.target.value)} placeholder="e.g. JBSWY3DPEHPK3PXP"
+                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 pr-10 text-xs text-white font-mono uppercase focus:outline-none focus:border-[#00dce5]/60 focus:shadow-[0_0_12px_rgba(0,229,255,0.15)] focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
+                    <button type="button" onClick={() => setShowSecret(!showSecret)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8e90a2] hover:text-white transition-colors">
+                      {showSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
