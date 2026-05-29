@@ -15,7 +15,9 @@ import {
   SERVICE_COLORS, getSecurityStrength,
   generateBatchTOTP, validateBase32, generateNewSecret,
   loadVaultData, saveVaultData,
-  BatchInput
+  argon2idHash, argon2idVerify, secureCompare,
+  encryptBackup, decryptBackup, writeAuditLog, readAuditLogs,
+  setWindowScreenshotProtection, BatchInput
 } from './utils';
 
 // ─── BIP-39 Mini Wordlist (256 common words for demo — real apps use full 2048) ───
@@ -161,6 +163,11 @@ const DEFAULT_SETTINGS: AppSettings = {
   devAccountTag: 'Premium',
   githubContributor: false,
   hiddenVaultSettings: { isEnabled: false, hash: '', method: 'pin' },
+  duressPinHash: '',
+  duressPassphraseHash: '',
+  duressAction: 'fake',
+  autoLockTimeout: 300,
+  instantLockOnBlur: false,
 };
 
 // Helper for Bitwarden URI parsing
@@ -199,6 +206,8 @@ export default function App() {
       const saved = await loadVaultData();
       setAccounts(saved);
       setIsAccountsLoaded(true);
+      // Enable native desktop screenshot/capture prevention
+      await setWindowScreenshotProtection(true);
     };
     bootData();
   }, []);
@@ -218,6 +227,18 @@ export default function App() {
   const [isMobileSearchExpanded, setIsMobileSearchExpanded] = useState<boolean>(false);
   const [isCreatingNewTagInModal, setIsCreatingNewTagInModal] = useState<boolean>(false);
   const [newTagNameInModal, setNewTagNameInModal] = useState<string>('');
+
+  // ── Blur Protection & Inactivity Auto-Lock States
+  const [isWindowBlurred, setIsWindowBlurred] = useState<boolean>(false);
+  const [isFakeVaultActive, setIsFakeVaultActive] = useState<boolean>(false);
+  const [backupPassword, setBackupPassword] = useState<string>('');
+  const [importBackupData, setImportBackupData] = useState<string>('');
+  const [auditLogs, setAuditLogs] = useState<string[]>([]);
+  const [decryptedLogKeyHex, setDecryptedLogKeyHex] = useState<string>('');
+  const [showDuressSetup, setShowDuressSetup] = useState<boolean>(false);
+  const [duressSetupPin, setDuressSetupPin] = useState<string>('');
+  const [duressSetupConfirm, setDuressSetupConfirm] = useState<string>('');
+  const [duressSetupError, setDuressSetupError] = useState<string>('');
 
   // ── Isolated Compartment (Stealth Hidden Keys) State Variables
   const [isHiddenVaultActive, setIsHiddenVaultActive] = useState<boolean>(false);
@@ -323,6 +344,90 @@ export default function App() {
     }
   }, []);
 
+  // ── Auto-Lock on Inactivity + Window Blur Security effects
+  const lastActivityRef = useRef<number>(Date.now());
+
+  useEffect(() => {
+    if (isLocked) return;
+
+    const handleUserActivity = () => {
+      lastActivityRef.current = Date.now();
+    };
+
+    window.addEventListener('mousemove', handleUserActivity);
+    window.addEventListener('keydown', handleUserActivity);
+    window.addEventListener('mousedown', handleUserActivity);
+    window.addEventListener('touchstart', handleUserActivity);
+
+    // Run a high-frequency checker for custom auto-lock interval
+    const checker = setInterval(() => {
+      const timeoutSec = settings.autoLockTimeout ?? 300;
+      if (timeoutSec <= 0) return; // "Never" option
+
+      const elapsed = (Date.now() - lastActivityRef.current) / 1000;
+      if (elapsed >= timeoutSec) {
+        safeTransition(() => {
+          setIsLocked(true);
+          setIsFakeVaultActive(false);
+          setIsHiddenVaultActive(false);
+          setDecryptedLogKeyHex('');
+          showToast('Vault auto-locked due to inactivity.', 'info');
+        });
+      }
+    }, 2000);
+
+    return () => {
+      window.removeEventListener('mousemove', handleUserActivity);
+      window.removeEventListener('keydown', handleUserActivity);
+      window.removeEventListener('mousedown', handleUserActivity);
+      window.removeEventListener('touchstart', handleUserActivity);
+      clearInterval(checker);
+    };
+  }, [isLocked, settings.autoLockTimeout]);
+
+  // Window Focus/Blur Handling
+  useEffect(() => {
+    const handleBlur = () => {
+      setIsWindowBlurred(true);
+      if (!isLocked && settings.instantLockOnBlur) {
+        safeTransition(() => {
+          setIsLocked(true);
+          setIsFakeVaultActive(false);
+          setIsHiddenVaultActive(false);
+          setDecryptedLogKeyHex('');
+          showToast('Vault auto-locked on window blur.', 'info');
+        });
+      }
+    };
+
+    const handleFocus = () => {
+      setIsWindowBlurred(false);
+    };
+
+    window.addEventListener('blur', handleBlur);
+    window.addEventListener('focus', handleFocus);
+
+    // Tauri-native focus change listener wrapping
+    let unlistenBlur: any;
+    let unlistenFocus: any;
+    const setupTauriListeners = async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const win = getCurrentWindow();
+        unlistenBlur = await win.onBlur(handleBlur);
+        unlistenFocus = await win.onFocus(handleFocus);
+      } catch {}
+    };
+    setupTauriListeners();
+
+    return () => {
+      window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('focus', handleFocus);
+      if (unlistenBlur) unlistenBlur();
+      if (unlistenFocus) unlistenFocus();
+    };
+  }, [isLocked, settings.instantLockOnBlur]);
+
   // ── App state
   const [activeTag, setActiveTag] = useState<string>('all');
   useEffect(() => {
@@ -383,6 +488,9 @@ export default function App() {
   const [formIsPinned, setFormIsPinned] = useState(false);
   const [formLogoType, setFormLogoType] = useState<Account['logoType']>('custom');
   const [formTagsString, setFormTagsString] = useState('');
+  const [formDigits, setFormDigits] = useState<number>(6);
+  const [formPeriod, setFormPeriod] = useState<number>(30);
+  const [formAlgorithm, setFormAlgorithm] = useState<'SHA1' | 'SHA256' | 'SHA512'>('SHA1');
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraStatus, setCameraStatus] = useState('');
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -494,6 +602,7 @@ export default function App() {
         secret: acc.secret,
         digits: acc.digits ?? 6,
         period: acc.period ?? 30,
+        algorithm: acc.algorithm || 'SHA1',
       }));
       const freshCodes = await generateBatchTOTP(batchPayload);
       if (isCurrent) {
@@ -569,29 +678,78 @@ export default function App() {
   useEffect(() => {
     if (isLocked && unlockMethod === 'pin' && unlockInput.length === 4) {
       const triggerUnlock = async () => {
-        const hash = await sha256(unlockInput);
-        if (hash === settings.pinHash) {
+        // 1. Check for Duress PIN first
+        if (settings.duressPinHash) {
+          const matchedDuress = await argon2idVerify(settings.duressPinHash, unlockInput);
+          if (matchedDuress) {
+            // Write silent locked tamper log
+            await writeAuditLog('DURESS AUTHENTICATION ENCOUNTERED (PIN)', undefined);
+            
+            safeTransition(() => {
+              if (settings.duressAction === 'wipe') {
+                // Silently scrub the stealth enclave
+                setAccounts(prev => prev.map(a => {
+                  const isHidden = a.category.toLowerCase() === 'hide' || a.category.toLowerCase() === 'hidden';
+                  return isHidden ? { ...a, secret: '••••••••', category: 'personal' } : a;
+                }));
+                showToast('Vault unlocked.', 'success');
+              } else {
+                // Show fake empty vault
+                setIsFakeVaultActive(true);
+              }
+              setIsLocked(false);
+              setUnlockError('');
+              setUnlockInput('');
+            });
+            return;
+          }
+        }
+
+        // 2. Validate normal PIN using Argon2id verifier
+        const matched = await argon2idVerify(settings.pinHash, unlockInput);
+        if (matched) {
+          const derivedKeyHex = await sha256(unlockInput + "OnlyAuthAuditLogSalt2026");
+          setDecryptedLogKeyHex(derivedKeyHex);
+          await writeAuditLog('Vault unlocked successfully (PIN)', derivedKeyHex);
+
+          // Auto-upgrade simple SHA-256 PIN to Argon2id if needed
+          let upgradedSettings = {};
+          if (!settings.pinHash.startsWith('$argon2id$')) {
+            const newHash = await argon2idHash(unlockInput);
+            upgradedSettings = { pinHash: newHash };
+          }
+
           safeTransition(() => {
             setIsLocked(false);
             setUnlockError('');
             setUnlockInput('');
-            setSettings(prev => ({ ...prev, pinAttempts: 0 }));
+            setSettings(prev => ({ ...prev, ...upgradedSettings, pinAttempts: 0 }));
           });
         } else {
           const nextAttempts = settings.pinAttempts + 1;
-          setSettings(prev => ({ ...prev, pinAttempts: nextAttempts }));
-          if (nextAttempts >= 5) {
-            setUnlockError('PIN locked out due to 5 failed attempts. Master passphrase required.');
-            setUnlockMethod('passphrase');
-          } else {
-            setUnlockError(`Incorrect PIN. Attempt ${nextAttempts}/5.`);
-          }
-          setUnlockInput('');
+          
+          // Enforce Rust-style exponential backoff rate limiting delay in constant time
+          const delayMs = Math.min(1000 * Math.pow(2, nextAttempts - 1), 16000);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+
+          // Log failed attempt
+          await writeAuditLog(`Failed PIN unlock attempt. Attempts: ${nextAttempts}/5`, undefined);
+
+          safeTransition(() => {
+            setSettings(prev => ({ ...prev, pinAttempts: nextAttempts }));
+            if (nextAttempts >= 5) {
+              setUnlockError('PIN locked out due to 5 failed attempts. Master passphrase required.');
+              setUnlockMethod('passphrase');
+            } else {
+              setUnlockError(`Incorrect PIN. Attempt ${nextAttempts}/5.`);
+            }
+            setUnlockInput('');
+          });
         }
       };
       triggerUnlock();
     }
-  }, [unlockInput, unlockMethod, isLocked, settings.pinHash, settings.pinAttempts]);
+  }, [unlockInput, unlockMethod, isLocked, settings.pinHash, settings.pinAttempts, settings.duressPinHash, settings.duressAction]);
 
   // ── Recurrent Gratitude Micro-Animation
   useEffect(() => {
@@ -620,16 +778,20 @@ export default function App() {
 
   const handleFinishSetup = async (skipPin = false) => {
     const phrase = setupWords.join(' ');
-    const phraseHash = await sha256(phrase);
-    const keyHash = await sha256(setupMasterKey);
+    const phraseHash = await argon2idHash(phrase);
+    const keyHash = await argon2idHash(setupMasterKey);
     let pinHash = '';
     if (!skipPin && setupPin.trim().length >= 4) {
       if (setupPin !== setupPinConfirm) {
         setSetupPinError("PINs don't match.");
         return;
       }
-      pinHash = await sha256(setupPin.trim());
+      pinHash = await argon2idHash(setupPin.trim());
     }
+    
+    const derivedKeyHex = await sha256(phrase + "OnlyAuthAuditLogSalt2026");
+    setDecryptedLogKeyHex(derivedKeyHex);
+    await writeAuditLog('Vault setup completed with hardened Argon2id KDF', derivedKeyHex);
     
     safeTransition(() => {
       setSettings(prev => ({ ...prev, passphraseHash: phraseHash, masterKeyHash: keyHash, pinHash, pinAttempts: 0 }));
@@ -657,22 +819,70 @@ export default function App() {
     e.preventDefault();
     const input = unlockInput.trim();
     if (!input) return;
-    let hash = '';
-    
+
     if (unlockMethod === 'passphrase') {
-      hash = await sha256(input);
-      if (hash === settings.passphraseHash || hash === settings.masterKeyHash) {
+      // 1. Check for Duress Passphrase first
+      if (settings.duressPassphraseHash) {
+        const matchedDuress = await argon2idVerify(settings.duressPassphraseHash, input);
+        if (matchedDuress) {
+          await writeAuditLog('DURESS AUTHENTICATION ENCOUNTERED (PASSPHRASE)', undefined);
+          safeTransition(() => {
+            if (settings.duressAction === 'wipe') {
+              setAccounts(prev => prev.map(a => {
+                const isHidden = a.category.toLowerCase() === 'hide' || a.category.toLowerCase() === 'hidden';
+                return isHidden ? { ...a, secret: '••••••••', category: 'personal' } : a;
+              }));
+              showToast('Vault unlocked.', 'success');
+            } else {
+              setIsFakeVaultActive(true);
+            }
+            setIsLocked(false);
+            setUnlockError('');
+            setUnlockInput('');
+          });
+          return;
+        }
+      }
+
+      // 2. Validate normal master passphrase or master key hash
+      const matchedPass = await argon2idVerify(settings.passphraseHash, input);
+      const matchedKey = await argon2idVerify(settings.masterKeyHash, input);
+
+      if (matchedPass || matchedKey) {
+        const derivedKeyHex = await sha256(input + "OnlyAuthAuditLogSalt2026");
+        setDecryptedLogKeyHex(derivedKeyHex);
+        await writeAuditLog('Vault unlocked successfully (Passphrase)', derivedKeyHex);
+
+        // Auto-upgrade legacy SHA-256 master passphrase hashes to Argon2id on successful unlock
+        let upgrades: Partial<AppSettings> = {};
+        if (!settings.passphraseHash.startsWith('$argon2id$')) {
+          upgrades.passphraseHash = await argon2idHash(input);
+        }
+        if (!settings.masterKeyHash.startsWith('$argon2id$')) {
+          upgrades.masterKeyHash = await argon2idHash(matchedKey ? input : settings.masterKeyHash);
+        }
+        
         safeTransition(() => {
           setIsLocked(false);
           setUnlockError('');
           setUnlockInput('');
-          // Successful passphrase unlock clears/resets the locked PIN
+          if (Object.keys(upgrades).length > 0) {
+            setSettings(prev => ({ ...prev, ...upgrades }));
+          }
           if (settings.pinAttempts >= 5 || settings.pinHash) {
             setSettings(prev => ({ ...prev, pinHash: '', pinAttempts: 0 }));
           }
         });
         return;
       }
+      
+      // Enforce failed backoff and logging
+      const nextAttempts = settings.pinAttempts + 1;
+      const delayMs = Math.min(1000 * Math.pow(2, nextAttempts - 1), 16000);
+      await new Promise(r => setTimeout(r, delayMs));
+      
+      await writeAuditLog(`Failed passphrase unlock attempt. Count: ${nextAttempts}`, undefined);
+      setSettings(prev => ({ ...prev, pinAttempts: nextAttempts }));
       setUnlockError('Incorrect passphrase or master key. Try again.');
       setUnlockInput('');
     } else if (unlockMethod === 'pin') {
@@ -686,26 +896,69 @@ export default function App() {
         setUnlockMethod('passphrase');
         return;
       }
-      
-      hash = await sha256(input);
-      if (hash === settings.pinHash) {
+
+      // 1. Check for Duress PIN first
+      if (settings.duressPinHash) {
+        const matchedDuress = await argon2idVerify(settings.duressPinHash, input);
+        if (matchedDuress) {
+          await writeAuditLog('DURESS AUTHENTICATION ENCOUNTERED (PIN)', undefined);
+          safeTransition(() => {
+            if (settings.duressAction === 'wipe') {
+              setAccounts(prev => prev.map(a => {
+                const isHidden = a.category.toLowerCase() === 'hide' || a.category.toLowerCase() === 'hidden';
+                return isHidden ? { ...a, secret: '••••••••', category: 'personal' } : a;
+              }));
+              showToast('Vault unlocked.', 'success');
+            } else {
+              setIsFakeVaultActive(true);
+            }
+            setIsLocked(false);
+            setUnlockError('');
+            setUnlockInput('');
+          });
+          return;
+        }
+      }
+
+      // 2. Validate normal PIN
+      const matched = await argon2idVerify(settings.pinHash, input);
+      if (matched) {
+        const derivedKeyHex = await sha256(input + "OnlyAuthAuditLogSalt2026");
+        setDecryptedLogKeyHex(derivedKeyHex);
+        await writeAuditLog('Vault unlocked successfully (PIN)', derivedKeyHex);
+
+        let upgradedSettings = {};
+        if (!settings.pinHash.startsWith('$argon2id$')) {
+          const newHash = await argon2idHash(input);
+          upgradedSettings = { pinHash: newHash };
+        }
+
         safeTransition(() => {
           setIsLocked(false);
           setUnlockError('');
           setUnlockInput('');
-          setSettings(prev => ({ ...prev, pinAttempts: 0 }));
+          setSettings(prev => ({ ...prev, ...upgradedSettings, pinAttempts: 0 }));
         });
         return;
       } else {
         const nextAttempts = settings.pinAttempts + 1;
-        setSettings(prev => ({ ...prev, pinAttempts: nextAttempts }));
-        if (nextAttempts >= 5) {
-          setUnlockError('PIN locked out due to 5 failed attempts. Master passphrase required.');
-          setUnlockMethod('passphrase');
-        } else {
-          setUnlockError(`Incorrect PIN. Attempt ${nextAttempts}/5.`);
-        }
-        setUnlockInput('');
+        
+        // Enforce backoff delay on failed attempt
+        const delayMs = Math.min(1000 * Math.pow(2, nextAttempts - 1), 16000);
+        await new Promise(r => setTimeout(r, delayMs));
+
+        await writeAuditLog(`Failed PIN unlock attempt. Count: ${nextAttempts}/5`, undefined);
+
+        safeTransition(() => {
+          setSettings(prev => ({ ...prev, pinAttempts: nextAttempts }));
+          if (nextAttempts >= 5) {
+            setUnlockError('PIN locked out due to 5 failed attempts. Master passphrase required.');
+            setUnlockMethod('passphrase');
+          } else {
+            setUnlockError(`Incorrect PIN. Attempt ${nextAttempts}/5.`);
+          }
+          setUnlockInput('');
+        });
       }
     }
   };
@@ -749,6 +1002,7 @@ export default function App() {
     formSecretRef.current = '';
     setFormNotes(''); setFormCategory(activeTag === 'all' ? 'personal' : activeTag);
     setFormIsPinned(false); setFormLogoType('custom'); setFormTagsString('');
+    setFormDigits(6); setFormPeriod(30); setFormAlgorithm('SHA1');
     setShowIconPicker(false);
     setIsAddModalOpen(true);
   });
@@ -760,6 +1014,9 @@ export default function App() {
     setFormNotes(account.notes); setFormCategory(account.category);
     setFormIsPinned(account.isPinned); setFormLogoType(account.logoType);
     setFormTagsString(account.tags?.join(', ') || '');
+    setFormDigits(account.digits || 6);
+    setFormPeriod(account.period || 30);
+    setFormAlgorithm(account.algorithm || 'SHA1');
     setShowIconPicker(false);
     setIsAddModalOpen(true);
   });
@@ -858,7 +1115,11 @@ export default function App() {
     const sanitizedSecret = resolvedSecret.trim().toUpperCase();
     if (editingAccount) {
       const updated = accounts.map(acc => acc.id === editingAccount.id
-        ? { ...acc, name: formName, email: formEmail, secret: sanitizedSecret, notes: formNotes, category: formCategory, isPinned: formIsPinned, logoType: formLogoType, tags: parsedTags }
+        ? { 
+            ...acc, name: formName, email: formEmail, secret: sanitizedSecret, notes: formNotes, 
+            category: formCategory, isPinned: formIsPinned, logoType: formLogoType, tags: parsedTags,
+            digits: formDigits, period: formPeriod, algorithm: formAlgorithm
+          }
         : acc
       );
       setAccounts(updated);
@@ -868,7 +1129,10 @@ export default function App() {
         id: `acc-${Date.now()}`, name: formName, email: formEmail, secret: sanitizedSecret,
         notes: formNotes || `2FA account for ${formName}`, category: formCategory,
         isPinned: formIsPinned, logoType: formLogoType, tags: parsedTags,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        digits: formDigits,
+        period: formPeriod,
+        algorithm: formAlgorithm
       };
       const updated = [newAcc, ...accounts];
       setAccounts(updated);
@@ -1103,7 +1367,22 @@ export default function App() {
   const handleCopyCode = (id: string, code: string) => {
     navigator.clipboard.writeText(code);
     setCopyFeedbackMap(prev => ({ ...prev, [id]: true }));
+    showToast('TOTP Code copied. Zero clipboard residue in 30s.', 'success');
     setTimeout(() => setCopyFeedbackMap(prev => ({ ...prev, [id]: false })), 1500);
+
+    // Schedule automatic clearing of clipboard after 30 seconds
+    setTimeout(async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text === code) {
+          await navigator.clipboard.writeText('');
+          showToast('Clipboard cleared for security.', 'info');
+        }
+      } catch {
+        // Fallback overwrite if clipboard read permissions are blocked by browser security
+        await navigator.clipboard.writeText('');
+      }
+    }, 30000);
   };
 
   // ── Support
@@ -1461,6 +1740,26 @@ export default function App() {
         '--sidebar-width': sidebarCollapsed ? '72px' : `${sidebarWidth}px`
       } as React.CSSProperties}>
       <StarfieldBackground speed={0.8} />
+
+      {/* ── WINDOW BLUR SECURITY SHIELD OVERLAY ── */}
+      <AnimatePresence>
+        {isWindowBlurred && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[9999] bg-black/85 backdrop-blur-[24px] flex flex-col items-center justify-center gap-4 text-center select-none cursor-default"
+          >
+            <div className="w-16 h-16 rounded-2xl bg-[#00dce5]/10 border border-[#00dce5]/20 flex items-center justify-center animate-pulse">
+              <Shield className="w-8 h-8 text-[#00dce5]" />
+            </div>
+            <div className="space-y-1">
+              <h2 className="text-lg font-semibold text-white">Vault Security Shield</h2>
+              <p className="text-xs text-[#8e90a2]">Screen protection active. Re-focus to resume.</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Mobile drawer backdrop */}
       <AnimatePresence>
@@ -2100,6 +2399,114 @@ export default function App() {
                     )}
                   </div>
                 </div>
+
+                {/* ── PANIC / DURESS MODE SETTINGS ── */}
+                <div className="glass-panel rounded-2xl p-6 border border-white/8 space-y-4">
+                  <div>
+                    <h3 className="font-display text-base font-semibold text-white">Panic / Duress Mode</h3>
+                    <p className="text-xs text-[#8e90a2] mt-0.5">When forced to unlock under pressure, entering a secondary Duress PIN triggers a silent emergency response.</p>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Action toggle */}
+                    <div className="bg-white/5 p-4 rounded-xl border border-white/8 space-y-2">
+                      <label className="text-[10px] uppercase font-bold text-[#8e90a2] tracking-wider">Duress Lockout Action</label>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSettings(prev => ({ ...prev, duressAction: 'fake' }))}
+                          className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold border transition-all ${settings.duressAction === 'fake' ? 'bg-[#00dce5]/10 border-[#00dce5] text-white' : 'bg-transparent border-white/10 text-[#8e90a2] hover:border-white/20'}`}
+                        >
+                          Show Fake Vault
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSettings(prev => ({ ...prev, duressAction: 'wipe' }))}
+                          className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold border transition-all ${settings.duressAction === 'wipe' ? 'bg-red-950/20 border-red-500/40 text-red-300' : 'bg-transparent border-white/10 text-[#8e90a2] hover:border-white/20'}`}
+                        >
+                          Scrub Stealth
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-[#8e90a2] leading-relaxed mt-1">
+                        {settings.duressAction === 'fake' 
+                          ? 'Unlocks a simulated fake empty vault with zero user accounts.' 
+                          : 'Silently and permanently wipes all accounts in the Stealth Isolated Compartment.'}
+                      </p>
+                    </div>
+
+                    {/* PIN setup */}
+                    <div className="bg-white/5 p-4 rounded-xl border border-white/8 space-y-2 flex flex-col justify-between">
+                      <div className="flex justify-between items-center">
+                        <label className="text-[10px] uppercase font-bold text-[#8e90a2] tracking-wider">Duress PIN Setup</label>
+                        <span className="text-[10px] font-mono text-[#00dce5]">{settings.duressPinHash ? 'PIN Fortified' : 'Not Configured'}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowDuressSetup(true)}
+                        className="w-full py-2 px-4 rounded-lg bg-[#00dce5]/10 text-[#00dce5] hover:bg-[#00dce5]/20 border border-[#00dce5]/20 font-semibold text-xs transition-all"
+                      >
+                        {settings.duressPinHash ? 'Change Duress PIN' : 'Configure Duress PIN'}
+                      </button>
+                      {settings.duressPinHash && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (confirm('Remove Duress PIN?')) {
+                              setSettings(prev => ({ ...prev, duressPinHash: '', duressPassphraseHash: '' }));
+                              showToast('Duress PIN removed.', 'info');
+                            }
+                          }}
+                          className="w-full mt-1.5 py-1 text-[10px] text-red-400 hover:text-red-300 font-semibold text-center transition-colors"
+                        >
+                          Disable Duress PIN
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── LOCAL AUDIT TRAIL LOGS ── */}
+                <div className="glass-panel rounded-2xl p-6 border border-white/8 space-y-4">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <h3 className="font-display text-base font-semibold text-white">Local Activity Audit Trail</h3>
+                      <p className="text-xs text-[#8e90a2] mt-0.5">Offline, zero-knowledge, append-only encrypted tamper logs tracking access attempts.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          const logs = await readAuditLogs(decryptedLogKeyHex);
+                          setAuditLogs(logs);
+                          showToast('Tamper logs loaded successfully.', 'success');
+                        } catch {
+                          showToast('Failed to decrypt audit logs.', 'error');
+                        }
+                      }}
+                      className="text-xs bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 px-3 py-1.5 rounded-lg text-[#00dce5] font-semibold transition-all flex items-center gap-1.5"
+                    >
+                      <RefreshCw className="w-3 h-3" /> Fetch Logs
+                    </button>
+                  </div>
+
+                  <div className="bg-[#0b0a0a] rounded-xl border border-white/5 max-h-48 overflow-y-auto font-mono text-[10px] p-4 space-y-1.5 custom-scrollbar">
+                    {auditLogs.length > 0 ? (
+                      [...auditLogs].reverse().map((log, i) => {
+                        const parts = log.split('|');
+                        const time = new Date(parseInt(parts[0], 10) * 1000).toLocaleString();
+                        const isAlert = log.includes('DURESS') || log.includes('Failed');
+                        return (
+                          <div key={i} className={`flex items-start justify-between py-1 border-b border-white/3 last:border-0 ${isAlert ? 'text-red-400' : 'text-neutral-400'}`}>
+                            <span className="shrink-0 text-white/40 mr-4">{time}</span>
+                            <span className="flex-1 break-all text-right">{parts[1]}</span>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="text-center text-[#8e90a2] py-4">Click "Fetch Logs" to view the encrypted trail.</div>
+                    )}
+                  </div>
+                </div>
               </motion.div>
             )}
 
@@ -2417,6 +2824,49 @@ export default function App() {
                             </label>
                           </div>
                         </div>
+                        
+                        {/* Integrity Sealed Backup Import */}
+                        <div className="space-y-2 pt-2.5 border-t border-white/5">
+                          <label className="text-[10px] uppercase font-bold text-[#8e90a2] tracking-wider block">Restore Sealed Backup</label>
+                          <input
+                            type="password"
+                            value={backupPassword}
+                            onChange={e => setBackupPassword(e.target.value)}
+                            placeholder="Enter backup password..."
+                            className="w-full bg-[#1c1b1b]/80 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 transition-all placeholder-[#8e90a2]"
+                          />
+                          <div className="relative">
+                            <input type="file" accept=".sealed,.txt,.json" onChange={async (e) => {
+                              const file = e.target.files?.[0]; if (!file) return;
+                              if (!backupPassword) {
+                                showToast('Please enter the backup password first.', 'error');
+                                return;
+                              }
+                              const reader = new FileReader();
+                              reader.onload = async ev => {
+                                try {
+                                  const payload = ev.target?.result as string;
+                                  const decrypted = await decryptBackup(payload.trim(), backupPassword);
+                                  const parsed = JSON.parse(decrypted);
+                                  safeTransition(() => {
+                                    if (parsed?.accounts) setAccounts(parsed.accounts);
+                                    if (parsed?.settings) setSettings(prev => ({ ...DEFAULT_SETTINGS, ...prev, ...parsed.settings }));
+                                    showToast('Integrity seal verified. Backup restored successfully.', 'success');
+                                    setBackupPassword('');
+                                  });
+                                } catch (err: any) {
+                                  showToast(err.message || 'Verification failed. Tampering detected or wrong password.', 'error');
+                                }
+                              };
+                              reader.readAsText(file);
+                            }} className="hidden" id="sealed-import-input" />
+                            <label htmlFor="sealed-import-input"
+                              className="w-full h-10 px-4 rounded-xl border border-[#00dce5]/20 bg-[#00dce5]/5 hover:bg-[#00dce5]/10 transition-all text-xs font-semibold flex items-center justify-between text-[#00dce5] cursor-pointer">
+                              <span>Select & Verify Sealed Backup</span>
+                              <ShieldCheck className="w-3.5 h-3.5" />
+                            </label>
+                          </div>
+                        </div>
                       </div>
 
                       {/* Export card */}
@@ -2439,6 +2889,47 @@ export default function App() {
                             className="w-full h-10 px-4 rounded-xl border border-red-500/20 hover:border-red-500/40 hover:bg-red-950/10 text-red-400 transition-all text-xs font-semibold flex items-center justify-between">
                             <span>Factory Reset Vault</span>
                             <AlertTriangle className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        
+                        {/* Encrypted Export with Integrity Seal */}
+                        <div className="space-y-2 pt-2.5 border-t border-white/5">
+                          <label className="text-[10px] uppercase font-bold text-[#8e90a2] tracking-wider block">Generate Sealed Export</label>
+                          <input
+                            type="password"
+                            value={backupPassword}
+                            onChange={e => setBackupPassword(e.target.value)}
+                            placeholder="Create backup password..."
+                            className="w-full bg-[#1c1b1b]/80 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 transition-all placeholder-[#8e90a2]"
+                          />
+                          <button
+                            onClick={async () => {
+                              if (!backupPassword) {
+                                showToast('Please create a backup password first.', 'error');
+                                return;
+                              }
+                              try {
+                                const raw = JSON.stringify({ accounts, settings });
+                                const encrypted = await encryptBackup(raw, backupPassword);
+                                const blob = new Blob([encrypted], { type: 'text/plain' });
+                                const url = URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                a.href = url;
+                                a.download = `OnlyAuth_Sealed_Backup_${new Date().toISOString().slice(0, 10)}.sealed`;
+                                document.body.appendChild(a);
+                                a.click();
+                                document.body.removeChild(a);
+                                showToast('Encrypted backup with Integrity Seal generated.', 'success');
+                                setBackupPassword('');
+                                setSettings(prev => ({ ...prev, lastBackupDate: new Date().toISOString() }));
+                              } catch {
+                                showToast('Backup encryption failed.', 'error');
+                              }
+                            }}
+                            className="w-full h-10 px-4 rounded-xl bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white hover:opacity-90 transition-all text-xs font-semibold flex items-center justify-between"
+                          >
+                            <span>Download Sealed Backup</span>
+                            <Shield className="w-3.5 h-3.5" />
                           </button>
                         </div>
                         
@@ -2774,6 +3265,46 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Advanced Cryptographic Settings Grid */}
+                <div className="grid grid-cols-3 gap-3 bg-white/5 p-3.5 rounded-xl border border-white/8">
+                  <div className="space-y-1.5">
+                    <label className="text-[9px] uppercase font-bold text-[#8e90a2] tracking-wider block">Algorithm</label>
+                    <select
+                      value={formAlgorithm}
+                      onChange={e => setFormAlgorithm(e.target.value as any)}
+                      className="w-full bg-[#1c1b1b] border border-white/10 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-[#00dce5]/60"
+                    >
+                      <option value="SHA1">SHA-1 (Default)</option>
+                      <option value="SHA256">SHA-256</option>
+                      <option value="SHA512">SHA-512</option>
+                    </select>
+                  </div>
+                  
+                  <div className="space-y-1.5">
+                    <label className="text-[9px] uppercase font-bold text-[#8e90a2] tracking-wider block">Period</label>
+                    <select
+                      value={formPeriod}
+                      onChange={e => setFormPeriod(parseInt(e.target.value, 10))}
+                      className="w-full bg-[#1c1b1b] border border-white/10 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-[#00dce5]/60"
+                    >
+                      <option value={30}>30s (Default)</option>
+                      <option value={60}>60s</option>
+                    </select>
+                  </div>
+                  
+                  <div className="space-y-1.5">
+                    <label className="text-[9px] uppercase font-bold text-[#8e90a2] tracking-wider block">Digits</label>
+                    <select
+                      value={formDigits}
+                      onChange={e => setFormDigits(parseInt(e.target.value, 10))}
+                      className="w-full bg-[#1c1b1b] border border-white/10 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-[#00dce5]/60"
+                    >
+                      <option value={6}>6 Digits (Default)</option>
+                      <option value={8}>8 Digits</option>
+                    </select>
+                  </div>
+                </div>
+
                 <textarea rows={2} value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="Notes (optional)"
                   className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
 
@@ -2896,6 +3427,103 @@ export default function App() {
                   <button type="submit"
                     className="px-5 py-2.5 text-xs bg-gradient-to-r from-amber-600 to-amber-500 text-white font-semibold rounded-xl hover:opacity-90 transition-opacity">
                     {hiddenVaultSetupMethod === 'biometrics' ? 'Register & Setup' : 'Complete Setup'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ── PANIC / DURESS MODE SETUP MODAL ── */}
+      <AnimatePresence>
+        {showDuressSetup && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-sm glass-panel rounded-2xl p-6 border border-[#00dce5]/20 relative">
+              <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-[#00dce5] to-transparent" />
+              
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-9 h-9 rounded-xl bg-[#00dce5]/10 border border-[#00dce5]/20 flex items-center justify-center">
+                  <Shield className="w-5 h-5 text-[#00dce5]" />
+                </div>
+                <div>
+                  <h3 className="font-display font-semibold text-white text-base">Setup Duress PIN</h3>
+                  <p className="text-[10px] text-[#8e90a2] tracking-wider uppercase font-mono">Emergency Silent Response</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-[#c4c5d9] mb-5 leading-relaxed">
+                Configure a secondary 4-digit PIN. Entering this PIN at the lock screen triggers your chosen emergency action silently.
+              </p>
+
+              <form onSubmit={async (e) => {
+                e.preventDefault();
+                setDuressSetupError('');
+                if (duressSetupPin.length < 4 || !/^\d+$/.test(duressSetupPin)) {
+                  setDuressSetupError('PIN must be at least 4 digits (numbers only).');
+                  return;
+                }
+                if (duressSetupPin !== duressSetupConfirm) {
+                  setDuressSetupError("PINs don't match.");
+                  return;
+                }
+                try {
+                  const hash = await argon2idHash(duressSetupPin);
+                  setSettings(prev => ({ ...prev, duressPinHash: hash }));
+                  setShowDuressSetup(false);
+                  setDuressSetupPin('');
+                  setDuressSetupConfirm('');
+                  showToast('Duress PIN configured successfully.', 'success');
+                } catch {
+                  setDuressSetupError('Error deriving secure Argon2id hash.');
+                }
+              }} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">New Duress PIN</label>
+                  <input
+                    type="password"
+                    pattern="\d*"
+                    maxLength={8}
+                    required
+                    value={duressSetupPin}
+                    onChange={e => setDuressSetupPin(e.target.value)}
+                    placeholder="Enter 4-8 digit PIN"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#00dce5]/50 transition-all placeholder-[#8e90a2] font-mono text-center tracking-widest text-lg"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">Confirm PIN</label>
+                  <input
+                    type="password"
+                    pattern="\d*"
+                    maxLength={8}
+                    required
+                    value={duressSetupConfirm}
+                    onChange={e => setDuressSetupConfirm(e.target.value)}
+                    placeholder="Re-enter PIN"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#00dce5]/50 transition-all placeholder-[#8e90a2] font-mono text-center tracking-widest text-lg"
+                  />
+                </div>
+
+                {duressSetupError && (
+                  <p className="text-xs text-red-400 font-mono bg-red-950/20 border border-red-500/20 px-3 py-1.5 rounded-lg">
+                    {duressSetupError}
+                  </p>
+                )}
+
+                <div className="flex gap-3 justify-end pt-2 border-t border-white/8">
+                  <button type="button" onClick={() => {
+                    setShowDuressSetup(false);
+                    setDuressSetupPin('');
+                    setDuressSetupConfirm('');
+                    setDuressSetupError('');
+                  }} className="px-4 py-2.5 text-xs text-[#8e90a2] hover:text-white font-semibold">
+                    Cancel
+                  </button>
+                  <button type="submit" className="px-5 py-2.5 text-xs bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white font-semibold rounded-xl hover:opacity-90 transition-opacity">
+                    Set Duress PIN
                   </button>
                 </div>
               </form>

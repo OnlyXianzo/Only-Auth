@@ -2,16 +2,33 @@ use std::collections::HashMap;
 use zeroize::Zeroize;
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
+use sha2::{Sha256, Sha512};
 use std::time::{SystemTime, UNIX_EPOCH};
+use subtle::ConstantTimeEq;
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce
+};
+use argon2::{
+    password_hash::{
+        rand_core::OsRng,
+        PasswordHash, PasswordHasher, PasswordVerifier, SaltString
+    },
+    Argon2, Params
+};
 
 type HmacSha1 = Hmac<Sha1>;
+type HmacSha256 = Hmac<Sha256>;
+type HmacSha512 = Hmac<Sha512>;
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountInput {
     pub id: String,
     pub secret: String,
     pub digits: u32,
     pub period: u64,
+    pub algorithm: Option<String>,
 }
 
 fn clean_secret(secret: &str) -> String {
@@ -51,24 +68,52 @@ pub async fn generate_totp_batch(accounts: Vec<AccountInput>) -> Result<HashMap<
                 let period = if account.period == 0 { 30 } else { account.period };
                 let time_step = current_time / period;
                 
-                // Step B: Serialize the 64-bit integer time step value T into an 8-byte big-endian array.
+                // Step B: Serialize the 64-bit integer T into an 8-byte big-endian array
                 let time_bytes = time_step.to_be_bytes();
                 
-                // Step C: Compute the HMAC-SHA1 hash using the decoded secret key array
-                let mut mac = match HmacSha1::new_from_slice(&secret_bytes) {
-                    Ok(m) => m,
-                    Err(_) => {
-                        secret_bytes.zeroize();
-                        results.insert(account.id, "------".to_string());
-                        continue;
+                // Step C: Compute the HMAC hash based on configured algorithm
+                let algo = account.algorithm.as_deref().unwrap_or("SHA1").to_uppercase();
+                let hs = match algo.as_str() {
+                    "SHA256" => {
+                        let mut mac = match <HmacSha256 as KeyInit>::new_from_slice(&secret_bytes) {
+                            Ok(m) => m,
+                            Err(_) => {
+                                secret_bytes.zeroize();
+                                results.insert(account.id, "------".to_string());
+                                continue;
+                            }
+                        };
+                        mac.update(&time_bytes);
+                        mac.finalize().into_bytes().to_vec()
+                    }
+                    "SHA512" => {
+                        let mut mac = match <HmacSha512 as KeyInit>::new_from_slice(&secret_bytes) {
+                            Ok(m) => m,
+                            Err(_) => {
+                                secret_bytes.zeroize();
+                                results.insert(account.id, "------".to_string());
+                                continue;
+                            }
+                        };
+                        mac.update(&time_bytes);
+                        mac.finalize().into_bytes().to_vec()
+                    }
+                    _ => {
+                        let mut mac = match <HmacSha1 as KeyInit>::new_from_slice(&secret_bytes) {
+                            Ok(m) => m,
+                            Err(_) => {
+                                secret_bytes.zeroize();
+                                results.insert(account.id, "------".to_string());
+                                continue;
+                            }
+                        };
+                        mac.update(&time_bytes);
+                        mac.finalize().into_bytes().to_vec()
                     }
                 };
-                mac.update(&time_bytes);
-                let result = mac.finalize();
-                let hs = result.into_bytes();
                 
-                // Step D: Extract a dynamic 4-byte binary code from the 20-byte HMAC result payload (HS)
-                let offset = (hs[19] & 0x0F) as usize;
+                // Step D: Extract a dynamic 4-byte binary code (generic for any HMAC output length)
+                let offset = (hs[hs.len() - 1] & 0x0F) as usize;
                 
                 let binary_code = ((hs[offset] as u32 & 0x7F) << 24)
                     | ((hs[offset + 1] as u32 & 0xFF) << 16)
@@ -80,7 +125,7 @@ pub async fn generate_totp_batch(accounts: Vec<AccountInput>) -> Result<HashMap<
                 let modulus = 10_u32.pow(digits);
                 let totp = binary_code % modulus;
                 
-                // Step F: Format the resulting integer as a string padded with leading zeros
+                // Step F: Format the resulting integer as a padded string
                 let code = format!("{:0width$}", totp, width = digits as usize);
                 
                 results.insert(account.id, code);
@@ -95,6 +140,166 @@ pub async fn generate_totp_batch(accounts: Vec<AccountInput>) -> Result<HashMap<
     }
     
     Ok(results)
+}
+
+#[tauri::command]
+pub fn argon2id_hash(password: String) -> Result<String, String> {
+    let salt = SaltString::generate(&mut OsRng);
+    // Argon2id parameters: 128MB ($M=131072$), 3 iterations ($T=3$), 4 threads ($P=4$)
+    let params = Params::new(131072, 3, 4, None).map_err(|e| e.to_string())?;
+    let argon2 = Argon2::new(
+        argon2::Algorithm::Argon2id,
+        argon2::Version::V0x13,
+        params,
+    );
+    let password_hash = argon2.hash_password(password.as_bytes(), &salt)
+        .map_err(|e| e.to_string())?
+        .to_string();
+    Ok(password_hash)
+}
+
+#[tauri::command]
+pub fn argon2id_verify(hash: String, password: String) -> Result<bool, String> {
+    let parsed_hash = match PasswordHash::new(&hash) {
+        Ok(h) => h,
+        Err(_) => return Ok(false),
+    };
+    let argon2 = Argon2::default();
+    Ok(argon2.verify_password(password.as_bytes(), &parsed_hash).is_ok())
+}
+
+#[tauri::command]
+pub fn secure_compare(a: String, b: String) -> bool {
+    if a.len() != b.len() {
+        // Dummy comparison to mitigate basic timing attack on length mismatch
+        let _ = a.as_bytes().ct_eq(a.as_bytes());
+        false
+    } else {
+        bool::from(a.as_bytes().ct_eq(b.as_bytes()))
+    }
+}
+
+#[tauri::command]
+pub fn encrypt_backup(data: String, password: String) -> Result<String, String> {
+    use rand::RngCore;
+    // 1. Generate random salt and nonce
+    let mut salt = [0u8; 16];
+    let mut nonce_bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut salt);
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+
+    // 2. Derive key from password using Argon2id
+    let params = Params::new(131072, 3, 4, None).map_err(|e| e.to_string())?;
+    let argon2 = Argon2::new(
+        argon2::Algorithm::Argon2id,
+        argon2::Version::V0x13,
+        params,
+    );
+    
+    // Request 64 bytes of output: 32 bytes for AES key, 32 bytes for HMAC key
+    let mut key_material = [0u8; 64];
+    argon2.hash_password_into(password.as_bytes(), &salt, &mut key_material)
+        .map_err(|e| e.to_string())?;
+        
+    let aes_key = &key_material[0..32];
+    let hmac_key = &key_material[32..64];
+
+    // 3. Encrypt data with AES-256-GCM
+    let cipher = Aes256Gcm::new_from_slice(aes_key).map_err(|e| e.to_string())?;
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let ciphertext = cipher.encrypt(nonce, data.as_bytes()).map_err(|e| e.to_string())?;
+
+    // 4. Compute HMAC-SHA256 signature (Integrity Seal) over salt + nonce + ciphertext
+    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(hmac_key).map_err(|e| e.to_string())?;
+    mac.update(&salt);
+    mac.update(&nonce_bytes);
+    mac.update(&ciphertext);
+    let hmac_result = mac.finalize().into_bytes();
+
+    // 5. Format payload: SALT_HEX:NONCE_HEX:CIPHERTEXT_HEX:HMAC_HEX
+    let payload = format!(
+        "{}:{}:{}:{}",
+        data_encoding::HEXLOWER.encode(&salt),
+        data_encoding::HEXLOWER.encode(&nonce_bytes),
+        data_encoding::HEXLOWER.encode(&ciphertext),
+        data_encoding::HEXLOWER.encode(&hmac_result)
+    );
+
+    Ok(payload)
+}
+
+#[tauri::command]
+pub fn decrypt_backup(payload: String, password: String) -> Result<String, String> {
+    let parts: Vec<&str> = payload.split(':').collect();
+    if parts.len() != 4 {
+        return Err("Invalid backup payload format".to_string());
+    }
+
+    let salt = data_encoding::HEXLOWER.decode(parts[0].as_bytes()).map_err(|e| e.to_string())?;
+    let nonce_bytes = data_encoding::HEXLOWER.decode(parts[1].as_bytes()).map_err(|e| e.to_string())?;
+    let ciphertext = data_encoding::HEXLOWER.decode(parts[2].as_bytes()).map_err(|e| e.to_string())?;
+    let provided_hmac = data_encoding::HEXLOWER.decode(parts[3].as_bytes()).map_err(|e| e.to_string())?;
+
+    // 2. Derive key from password using Argon2id
+    let params = Params::new(131072, 3, 4, None).map_err(|e| e.to_string())?;
+    let argon2 = Argon2::new(
+        argon2::Algorithm::Argon2id,
+        argon2::Version::V0x13,
+        params,
+    );
+    
+    let mut key_material = [0u8; 64];
+    argon2.hash_password_into(password.as_bytes(), &salt, &mut key_material)
+        .map_err(|e| e.to_string())?;
+        
+    let aes_key = &key_material[0..32];
+    let hmac_key = &key_material[32..64];
+
+    // 3. Compute and verify HMAC signature in constant time
+    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(hmac_key).map_err(|e| e.to_string())?;
+    mac.update(&salt);
+    mac.update(&nonce_bytes);
+    mac.update(&ciphertext);
+    let computed_hmac = mac.finalize().into_bytes();
+
+    if !bool::from(computed_hmac.ct_eq(&provided_hmac)) {
+        return Err("Integrity seal verification failed. The backup has been tampered with or incorrect password.".to_string());
+    }
+
+    // 4. Decrypt ciphertext
+    let cipher = Aes256Gcm::new_from_slice(aes_key).map_err(|e| e.to_string())?;
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let decrypted_bytes = cipher.decrypt(nonce, ciphertext.as_slice()).map_err(|e| e.to_string())?;
+
+    let decrypted_str = String::from_utf8(decrypted_bytes).map_err(|e| e.to_string())?;
+    Ok(decrypted_str)
+}
+
+#[cfg(target_os = "windows")]
+extern "system" {
+    fn SetWindowDisplayAffinity(hwnd: *mut std::ffi::c_void, dwAffinity: u32) -> i32;
+}
+
+#[tauri::command]
+pub fn set_window_screenshot_protection(window: tauri::Window, protect: bool) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri::Manager;
+        if let Ok(hwnd) = window.hwnd() {
+            unsafe {
+                let raw_hwnd = hwnd.0 as *mut std::ffi::c_void;
+                let affinity = if protect { 0x00000011 } else { 0x00000000 }; // 0x00000011 = WDA_EXCLUDEFROMCAPTURE
+                let res = SetWindowDisplayAffinity(raw_hwnd, affinity);
+                if res == 0 {
+                    // Fallback to WDA_MONITOR (0x1) if WDA_EXCLUDEFROMCAPTURE is unsupported
+                    SetWindowDisplayAffinity(raw_hwnd, 0x00000001);
+                }
+            }
+        }
+    }
+    let _ = window;
+    let _ = protect;
+    Ok(())
 }
 
 #[cfg(test)]

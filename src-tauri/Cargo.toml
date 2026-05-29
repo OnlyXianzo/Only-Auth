@@ -27,6 +27,11 @@ data-encoding = "2"
 zeroize = { version = "1", features = ["derive"] }
 hmac = "0.12"
 sha1 = "0.10"
+argon2 = "0.5"
+subtle = "2.5"
+aes-gcm = "0.10"
+rand = "0.8"
+sha2 = "0.10"
 
 [profile.dev]
 opt-level = 0

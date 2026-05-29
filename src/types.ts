@@ -35,10 +35,15 @@ export interface AppSettings {
   appLockMethod: 'biometrics' | 'pin' | 'passphrase';
   pinAttempts: number;
   forceSearchOnStartup: boolean;
-  devAccountName: string;
-  devAccountTag: string;
   githubContributor: boolean;
   hiddenVaultSettings: HiddenVaultSettings;
+  devAccountName?: string;
+  devAccountTag?: string;
+  duressPinHash?: string;
+  duressPassphraseHash?: string;
+  duressAction?: 'wipe' | 'fake';
+  autoLockTimeout?: number;
+  instantLockOnBlur?: boolean;
 }
 
 
