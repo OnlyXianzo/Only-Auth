@@ -214,13 +214,24 @@ export default function App() {
   const isFirstRun = !settings.passphraseHash;
   const [isLocked, setIsLocked] = useState(true);
 
-  // ── Ghost Mode State Variables
+  // ── Mobile Responsive & UX State Variables
+  const [isMobileSearchExpanded, setIsMobileSearchExpanded] = useState<boolean>(false);
+  const [isCreatingNewTagInModal, setIsCreatingNewTagInModal] = useState<boolean>(false);
+  const [newTagNameInModal, setNewTagNameInModal] = useState<string>('');
+
+  // ── Isolated Compartment (Stealth Hidden Keys) State Variables
   const [isHiddenVaultActive, setIsHiddenVaultActive] = useState<boolean>(false);
   const [showHiddenSetupModal, setShowHiddenSetupModal] = useState<boolean>(false);
-  const [hiddenVaultSetupMethod, setHiddenVaultSetupMethod] = useState<'pin' | 'passphrase' | 'biometrics'>('pin');
+  const [hiddenVaultSetupMethod, setHiddenVaultSetupMethod] = useState<'pin' | 'passphrase'>('pin');
   const [hiddenVaultSetupInput, setHiddenVaultSetupInput] = useState<string>('');
   const [hiddenVaultSetupConfirm, setHiddenVaultSetupConfirm] = useState<string>('');
   const [hiddenVaultSetupError, setHiddenVaultSetupError] = useState<string>('');
+
+  // ── Partition Settings Panel states
+  const [partitionMethod, setPartitionMethod] = useState<'pin' | 'passphrase'>('pin');
+  const [partitionInput, setPartitionInput] = useState<string>('');
+  const [partitionConfirm, setPartitionConfirm] = useState<string>('');
+  const [partitionError, setPartitionError] = useState<string>('');
 
   // ── Mock Tauri Invoke cryptographic boundary
   const verifyHiddenCredentials = async (input: string): Promise<boolean> => {
@@ -245,22 +256,6 @@ export default function App() {
     e.preventDefault();
     setHiddenVaultSetupError('');
     
-    if (hiddenVaultSetupMethod === 'biometrics') {
-      try {
-        const simulatedHash = await sha256("biometrics-approved");
-        setSettings(prev => ({
-          ...prev,
-          hiddenVaultSettings: { isEnabled: true, hash: simulatedHash, method: 'biometrics' },
-          customTags: prev.customTags.includes('hidden') ? prev.customTags : [...prev.customTags, 'hidden']
-        }));
-        setShowHiddenSetupModal(false);
-        showToast('Ghost Vault initialized with Device Biometrics.', 'success');
-      } catch (err) {
-        setHiddenVaultSetupError('Biometric setup failed.');
-      }
-      return;
-    }
-
     if (!hiddenVaultSetupInput.trim()) {
       setHiddenVaultSetupError('Input cannot be empty.');
       return;
@@ -282,7 +277,7 @@ export default function App() {
         customTags: prev.customTags.includes('hidden') ? prev.customTags : [...prev.customTags, 'hidden']
       }));
       setShowHiddenSetupModal(false);
-      showToast(`Ghost Vault sealed with ${hiddenVaultSetupMethod === 'pin' ? 'PIN' : 'Passphrase'}. Type it in the search bar to unseal.`, 'success');
+      showToast(`Isolated Compartment initialized. Type passcode in the search bar to unlock.`, 'success');
     } catch (err) {
       setHiddenVaultSetupError('An error occurred during hashing.');
     }
@@ -330,6 +325,11 @@ export default function App() {
 
   // ── App state
   const [activeTag, setActiveTag] = useState<string>('all');
+  useEffect(() => {
+    if (settings.hiddenVaultSettings) {
+      setPartitionMethod(settings.hiddenVaultSettings.method === 'passphrase' ? 'passphrase' : 'pin');
+    }
+  }, [settings.hiddenVaultSettings, activeTag]);
   const [searchQuery, setSearchQuery] = useState('');
   const [focusedAccountId, setFocusedAccountId] = useState<string>('');
   const [secondsRemaining, setSecondsRemaining] = useState(30);
@@ -755,7 +755,7 @@ export default function App() {
 
   const openEditModal = (account: Account) => safeTransition(() => {
     setEditingAccount(account);
-    setFormName(account.name); setFormEmail(account.email); setFormSecret(account.secret); setShowSecret(false);
+    setFormName(account.name); setFormEmail(account.email); setFormSecret('••••••••'); setShowSecret(false);
     formSecretRef.current = account.secret;
     setFormNotes(account.notes); setFormCategory(account.category);
     setFormIsPinned(account.isPinned); setFormLogoType(account.logoType);
@@ -769,7 +769,21 @@ export default function App() {
     if (secret) setFormSecret(secret);
   };
 
-  const triggerVerifyAction = (type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey', data?: any) => safeTransition(() => {
+  const handleToggleFormSecretVisibility = () => {
+    if (showSecret) {
+      if (editingAccount) {
+        setFormSecret('••••••••');
+      }
+      setShowSecret(false);
+    } else {
+      if (editingAccount) {
+        setFormSecret(editingAccount.secret || formSecretRef.current);
+      }
+      setShowSecret(true);
+    }
+  };
+
+  const triggerVerifyAction = (type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition', data?: any) => safeTransition(() => {
     setPendingAction({ type, data });
     setVerificationInput('');
     setVerificationError('');
@@ -806,6 +820,26 @@ export default function App() {
             setNewMasterKeyField('');
             showToast('Master Key updated successfully.', 'success');
           });
+        } else if (pendingAction?.type === 'update-partition-settings') {
+          const { method, passcode } = pendingAction.data;
+          sha256(passcode).then(newHash => {
+            setSettings(prev => ({
+              ...prev,
+              hiddenVaultSettings: { isEnabled: true, hash: newHash, method },
+              customTags: prev.customTags.includes('hidden') ? prev.customTags : [...prev.customTags, 'hidden']
+            }));
+            showToast('Vault Partition settings updated.', 'success');
+          });
+        } else if (pendingAction?.type === 'disable-partition') {
+          setAccounts(prev => prev.map(a => a.category === 'hidden' ? { ...a, category: 'personal' } : a));
+          setSettings(prev => ({
+            ...prev,
+            hiddenVaultSettings: { isEnabled: false, hash: '', method: 'pin' },
+            customTags: prev.customTags.filter(t => t !== 'hidden')
+          }));
+          setIsHiddenVaultActive(false);
+          setActiveTag('all');
+          showToast('Vault Partition disabled. Hidden accounts moved to Personal.', 'info');
         }
         setIsVerificationModalOpen(false);
         setPendingAction(null);
@@ -817,7 +851,10 @@ export default function App() {
 
   const saveAccountConfirmed = () => {
     const parsedTags = formTagsString.split(',').map(t => t.trim()).filter(Boolean);
-    const resolvedSecret = formSecret || formSecretRef.current;
+    let resolvedSecret = formSecret || formSecretRef.current;
+    if (resolvedSecret === '••••••••' && editingAccount) {
+      resolvedSecret = editingAccount.secret;
+    }
     const sanitizedSecret = resolvedSecret.trim().toUpperCase();
     if (editingAccount) {
       const updated = accounts.map(acc => acc.id === editingAccount.id
@@ -1490,6 +1527,20 @@ export default function App() {
 
           {/* Static nav divider */}
           <div className="mt-3 pt-3 border-t border-white/5 flex flex-col gap-1">
+            {/* Hidden Keys (only when unsealed) */}
+            {isHiddenVaultActive && (
+              <button onClick={() => safeTransition(() => { setActiveTag('hidden-keys'); setMobileDrawerOpen(false); })}
+                className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all duration-150 ease-out border-l-[3px] ${
+                  activeTag === 'hidden-keys'
+                    ? 'bg-amber-500/10 text-amber-400 border-amber-500 font-semibold'
+                    : 'border-transparent text-amber-400 hover:bg-amber-500/5'
+                } ${sidebarCollapsed ? 'justify-center px-0 border-l-0 rounded-full w-10 h-10 mx-auto' : ''}`}
+                title={sidebarCollapsed ? "Hidden Keys" : undefined}>
+                <Key className="w-4 h-4 shrink-0" />
+                {!sidebarCollapsed && <span>Hidden Keys</span>}
+              </button>
+            )}
+
             {/* Security */}
             {(() => {
               const tab = sidebarTabs[0];
@@ -1583,41 +1634,72 @@ export default function App() {
 
         {/* Header */}
         <header className="w-full h-16 px-4 md:px-8 flex items-center justify-between border-b border-white/5 shrink-0 relative z-20 gap-3">
-          <div className="flex items-center gap-3">
-            {/* Mobile hamburger */}
-            <button onClick={() => setMobileDrawerOpen(true)} className="md:hidden w-9 h-9 rounded-xl hover:bg-white/10 flex items-center justify-center text-[#c4c5d9] hover:text-white transition-colors">
-              <Menu className="w-5 h-5" />
-            </button>
-            <h1 className="font-display font-semibold text-lg md:text-xl text-white capitalize leading-none">
-              {activeTag === 'all' ? 'Dashboard' : activeTag === 'security' ? 'Security' : activeTag === 'settings' ? 'Settings' : activeTag === 'support' ? 'Support' : activeTag}
-            </h1>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {/* Search — hidden on very small mobile */}
-            {isVaultTab && (
-              <div className="relative hidden sm:block">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8e90a2]" />
-                <input ref={searchInputRef} type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search accounts..."
-                  className="w-48 md:w-60 bg-white/5 border border-white/10 rounded-full py-2 pl-9 pr-4 text-xs text-white focus:outline-none focus:border-[#00dce5]/40 focus:ring-1 focus:ring-[#00dce5]/20 transition-all placeholder-[#8e90a2]" />
-              </div>
-            )}
-
-            {/* Compact toggle */}
-            <button onClick={() => setSettings(prev => ({ ...prev, compactMode: !prev.compactMode }))}
-              title={c ? 'Normal view' : 'Compact view'}
-              className="w-9 h-9 rounded-full glass-panel flex items-center justify-center text-[#c4c5d9] hover:text-white transition-colors">
-              {c ? <ZoomIn className="w-4 h-4" /> : <ZoomOut className="w-4 h-4" />}
-            </button>
-
-            {/* Add account button */}
-            {isVaultTab && (
-              <button onClick={openAddModal}
-                className="w-9 h-9 rounded-full bg-[#00dce5] text-black flex items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all duration-150 ease-out">
-                <Plus className="w-5 h-5 stroke-[3px]" />
+          {isMobileSearchExpanded ? (
+            <div className="flex-1 flex items-center gap-2.5 h-full animate-fade-in px-1">
+              <button onClick={() => { setIsMobileSearchExpanded(false); setSearchQuery(''); }}
+                className="w-9 h-9 rounded-full hover:bg-white/10 flex items-center justify-center text-[#c4c5d9] hover:text-white transition-colors cursor-pointer">
+                <X className="w-5 h-5" />
               </button>
-            )}
-          </div>
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8e90a2]" />
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Search accounts..."
+                  autoFocus
+                  className="w-full bg-white/5 border border-white/10 rounded-full py-2 pl-9 pr-4 text-xs text-white focus:outline-none focus:border-[#00dce5]/40 focus:ring-1 focus:ring-[#00dce5]/20 transition-all placeholder-[#8e90a2]"
+                />
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-3">
+                {/* Mobile hamburger */}
+                <button onClick={() => setMobileDrawerOpen(true)} className="md:hidden w-9 h-9 rounded-xl hover:bg-white/10 flex items-center justify-center text-[#c4c5d9] hover:text-white transition-colors">
+                  <Menu className="w-5 h-5" />
+                </button>
+                <h1 className="font-display font-semibold text-lg md:text-xl text-white capitalize leading-none">
+                  {activeTag === 'all' ? 'Dashboard' : activeTag === 'security' ? 'Security' : activeTag === 'settings' ? 'Settings' : activeTag === 'support' ? 'Support' : activeTag === 'hidden-keys' ? 'Hidden Keys' : activeTag}
+                </h1>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {/* Search — desktop view */}
+                {isVaultTab && (
+                  <div className="relative hidden sm:block">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8e90a2]" />
+                    <input ref={searchInputRef} type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search accounts..."
+                      className="w-48 md:w-60 bg-white/5 border border-white/10 rounded-full py-2 pl-9 pr-4 text-xs text-white focus:outline-none focus:border-[#00dce5]/40 focus:ring-1 focus:ring-[#00dce5]/20 transition-all placeholder-[#8e90a2]" />
+                  </div>
+                )}
+
+                {/* Mobile search button */}
+                {isVaultTab && (
+                  <button onClick={() => setIsMobileSearchExpanded(true)}
+                    className="sm:hidden w-9 h-9 rounded-full glass-panel flex items-center justify-center text-[#c4c5d9] hover:text-white transition-colors cursor-pointer">
+                    <Search className="w-4 h-4" />
+                  </button>
+                )}
+
+                {/* Compact toggle */}
+                <button onClick={() => setSettings(prev => ({ ...prev, compactMode: !prev.compactMode }))}
+                  title={c ? 'Normal view' : 'Compact view'}
+                  className="w-9 h-9 rounded-full glass-panel flex items-center justify-center text-[#c4c5d9] hover:text-white transition-colors cursor-pointer">
+                  {c ? <ZoomIn className="w-4 h-4" /> : <ZoomOut className="w-4 h-4" />}
+                </button>
+
+                {/* Add account button — desktop only */}
+                {isVaultTab && (
+                  <button onClick={openAddModal}
+                    className="hidden sm:flex w-9 h-9 rounded-full bg-[#00dce5] text-black items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all duration-150 ease-out cursor-pointer">
+                    <Plus className="w-5 h-5 stroke-[3px]" />
+                  </button>
+                )}
+              </div>
+            </>
+          )}
         </header>
 
         {/* Content */}
@@ -1645,8 +1727,8 @@ export default function App() {
                           <LockOpen className="w-4 h-4 text-amber-400" />
                         </div>
                         <div>
-                          <p className="text-[11px] font-semibold text-amber-400 uppercase tracking-[0.15em] font-display">Ghost Mode Active</p>
-                          <p className="text-[10px] text-amber-500/70 mt-0.5">Hidden accounts visible. Changes tag or clears search to reseal.</p>
+                          <p className="text-[11px] font-semibold text-amber-400 uppercase tracking-[0.15em] font-display">Isolated Compartment Active</p>
+                          <p className="text-[10px] text-amber-500/70 mt-0.5">Isolated keys revealed. Change tags or clear search to seal.</p>
                         </div>
                       </div>
                       <button onClick={() => setIsHiddenVaultActive(false)} className="text-amber-600 hover:text-amber-400 transition-colors p-1 rounded-lg hover:bg-amber-500/10">
@@ -1832,6 +1914,109 @@ export default function App() {
                     }) : (
                       <div className="glass-panel rounded-xl p-6 text-center text-xs text-[#8e90a2] col-span-full">No accounts match this filter.</div>
                     )}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {/* ── HIDDEN KEYS (Vault Partition) ───────────────────────────── */}
+            {activeTag === 'hidden-keys' && (
+              <motion.div key="hidden-keys" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="max-w-3xl space-y-6 animate-fade-in">
+                <div className="border border-amber-500/25 bg-amber-950/10 rounded-3xl p-6 md:p-8 flex flex-col md:flex-row items-center gap-6">
+                  <div className="space-y-2 flex-1">
+                    <span className="text-[9px] uppercase tracking-widest font-semibold text-amber-400">Stealth Enclave</span>
+                    <h2 className="font-display text-2xl font-semibold text-white">Hidden Keys Management</h2>
+                    <p className="text-xs text-amber-500/70 leading-relaxed">
+                      Configure your isolated compartment passcode. This partition remains completely invisible until unsealed via the dashboard search entry.
+                    </p>
+                  </div>
+                  <div className="w-20 h-20 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center shrink-0">
+                    <Key className="w-8 h-8 text-amber-400" />
+                  </div>
+                </div>
+
+                {/* Settings Form */}
+                <div className="glass-panel rounded-2xl p-6 border border-white/8 space-y-5">
+                  <h3 className="font-display text-base font-semibold text-white">Partition Settings</h3>
+                  <p className="text-xs text-[#8e90a2]">Customize how you unlock your isolated tag compartment. Master passphrase or key verification is required to commit changes.</p>
+                  
+                  {partitionError && (
+                    <p className="text-xs text-red-400 font-semibold">{partitionError}</p>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-3 mb-4">
+                    {(['pin', 'passphrase'] as const).map(method => (
+                      <button key={method} type="button" onClick={() => {
+                        setPartitionMethod(method);
+                        setPartitionInput('');
+                        setPartitionConfirm('');
+                        setPartitionError('');
+                      }}
+                        className={`py-2.5 px-3 rounded-xl border text-xs uppercase font-bold tracking-wider text-center transition-all ${
+                          partitionMethod === method ? 'border-amber-500/60 bg-amber-500/10 text-white' : 'border-white/10 bg-white/5 text-[#c4c5d9] hover:border-white/20'
+                        }`}>
+                        {method}
+                      </button>
+                    ))}
+                  </div>
+
+                  <form onSubmit={(e) => {
+                    e.preventDefault();
+                    setPartitionError('');
+                    if (!partitionInput.trim()) {
+                      setPartitionError('Passcode cannot be empty.');
+                      return;
+                    }
+                    if (partitionInput !== partitionConfirm) {
+                      setPartitionError('Passcodes do not match.');
+                      return;
+                    }
+                    if (partitionMethod === 'pin' && !/^\d{4,8}$/.test(partitionInput)) {
+                      setPartitionError('PIN must be between 4 and 8 digits.');
+                      return;
+                    }
+                    triggerVerifyAction('update-partition-settings', { method: partitionMethod, passcode: partitionInput.trim() });
+                  }} className="space-y-4 max-w-md">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">
+                        {partitionMethod === 'pin' ? 'Secret PIN (digits only)' : 'Secret Passphrase'}
+                      </label>
+                      <input
+                        type={partitionMethod === 'pin' ? 'text' : 'password'}
+                        required
+                        pattern={partitionMethod === 'pin' ? '\\d*' : undefined}
+                        maxLength={partitionMethod === 'pin' ? 8 : undefined}
+                        value={partitionInput}
+                        onChange={e => setPartitionInput(e.target.value)}
+                        placeholder={partitionMethod === 'pin' ? 'e.g. 9999' : 'e.g. correct horse battery staple'}
+                        className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500/50 transition-all placeholder-[#8e90a2]"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">Confirm Passcode</label>
+                      <input
+                        type={partitionMethod === 'pin' ? 'text' : 'password'}
+                        required
+                        value={partitionConfirm}
+                        onChange={e => setPartitionConfirm(e.target.value)}
+                        placeholder="Re-enter passcode"
+                        className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500/50 transition-all placeholder-[#8e90a2]"
+                      />
+                    </div>
+                    <button type="submit" className="px-5 py-2.5 text-xs bg-amber-500 text-black font-semibold rounded-xl hover:opacity-90 active:scale-[0.98] transition-all cursor-pointer">
+                      Save Partition Passcode
+                    </button>
+                  </form>
+
+                  {/* Deactivation Area */}
+                  <div className="border-t border-white/8 pt-5 space-y-3">
+                    <h4 className="text-sm font-semibold text-white">Disable Isolated Compartment</h4>
+                    <p className="text-xs text-[#8e90a2]">Deactivate the isolated compartment. All hidden accounts will be returned to your default Personal tag and all partition passcode configurations will be safely wiped.</p>
+                    <button
+                      onClick={() => triggerVerifyAction('disable-partition')}
+                      className="px-4 py-2.5 text-xs bg-red-950/20 text-red-400 border border-red-500/20 rounded-xl font-semibold hover:bg-red-950/40 transition-all active:scale-[0.98] cursor-pointer">
+                      Disable Isolated Compartment
+                    </button>
                   </div>
                 </div>
               </motion.div>
@@ -2176,67 +2361,10 @@ export default function App() {
                         ))}
                       </div>
                       <form onSubmit={createTag} className="flex gap-2.5">
-                        <input type="text" value={newTagName} onChange={e => setNewTagName(e.target.value)} placeholder="Type 'hide' or 'hidden' to create a Ghost Vault..."
+                        <input type="text" value={newTagName} onChange={e => setNewTagName(e.target.value)} placeholder="Enter new tag name..."
                           className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#00dce5]/50 transition-all placeholder-[#8e90a2]" />
                         <button type="submit" className="px-4 py-2.5 bg-[#00dce5] text-black text-xs font-semibold rounded-xl hover:opacity-90 transition-opacity">Add Tag</button>
                       </form>
-                    </div>
-
-                    {/* Ghost Vault Status Card */}
-                    <div className={`rounded-2xl p-5 border flex items-start gap-4 ${
-                      settings.hiddenVaultSettings?.isEnabled
-                        ? 'border-amber-500/25 bg-amber-950/8'
-                        : 'border-white/8 bg-white/[0.02]'
-                    }`}>
-                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border ${
-                        settings.hiddenVaultSettings?.isEnabled
-                          ? 'bg-amber-500/15 border-amber-500/30'
-                          : 'bg-white/5 border-white/10'
-                      }`}>
-                        <ShieldCheck className={`w-4.5 h-4.5 ${
-                          settings.hiddenVaultSettings?.isEnabled ? 'text-amber-400' : 'text-[#8e90a2]'
-                        }`} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <h4 className="text-xs font-semibold text-white uppercase tracking-wider">Ghost Vault</h4>
-                          <span className={`text-[9px] font-mono px-2 py-0.5 rounded-full uppercase tracking-wider ${
-                            settings.hiddenVaultSettings?.isEnabled
-                              ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                              : 'bg-white/5 text-[#8e90a2] border border-white/8'
-                          }`}>
-                            {settings.hiddenVaultSettings?.isEnabled ? 'Active' : 'Inactive'}
-                          </span>
-                        </div>
-                        {settings.hiddenVaultSettings?.isEnabled ? (
-                          <>
-                            <p className="text-[10px] text-amber-500/70 mt-1 leading-relaxed">
-                              Method: <span className="text-amber-400 font-semibold uppercase">{settings.hiddenVaultSettings.method}</span>
-                              {' · '}{accounts.filter(a => a.category === 'hidden').length} sealed account{accounts.filter(a => a.category === 'hidden').length !== 1 ? 's' : ''}
-                            </p>
-                            <button
-                              onClick={() => {
-                                if (!confirm('Disable Ghost Vault? Hidden accounts will be moved to Personal.')) return;
-                                setAccounts(prev => prev.map(a => a.category === 'hidden' ? { ...a, category: 'personal' } : a));
-                                setSettings(prev => ({
-                                  ...prev,
-                                  hiddenVaultSettings: { isEnabled: false, hash: '', method: 'pin' },
-                                  customTags: prev.customTags.filter(t => t !== 'hidden')
-                                }));
-                                setIsHiddenVaultActive(false);
-                                showToast('Ghost Vault disabled. Accounts moved to Personal.', 'info');
-                              }}
-                              className="mt-2.5 text-[10px] text-red-400/70 hover:text-red-400 transition-colors flex items-center gap-1"
-                            >
-                              <X className="w-3 h-3" /> Disable Ghost Vault
-                            </button>
-                          </>
-                        ) : (
-                          <p className="text-[10px] text-[#8e90a2] mt-1 leading-relaxed">
-                            Create a tag named <span className="text-white/60 font-mono">'hide'</span> or <span className="text-white/60 font-mono">'hidden'</span> above to activate a secret compartment for sensitive accounts.
-                          </p>
-                        )}
-                      </div>
                     </div>
                   </div>
                 )}
@@ -2444,6 +2572,17 @@ export default function App() {
 
           </AnimatePresence>
         </div>
+
+        {/* Floating Add Account button for small screens */}
+        {isVaultTab && (
+          <button
+            onClick={openAddModal}
+            className="sm:hidden fixed bottom-6 right-6 w-14 h-14 rounded-full bg-[#00dce5] text-black flex items-center justify-center shadow-[0_4px_20px_rgba(0,220,229,0.3)] hover:scale-110 active:scale-95 transition-all duration-150 ease-out z-40 cursor-pointer"
+            aria-label="Add account"
+          >
+            <Plus className="w-7 h-7 stroke-[3px]" />
+          </button>
+        )}
       </main>
 
       {/* ── ADD / EDIT MODAL ─────────────────────────────────────────────── */}
@@ -2560,7 +2699,7 @@ export default function App() {
                   <div className="relative">
                     <input type={showSecret ? "text" : "password"} required value={formSecret} onChange={e => setFormSecret(e.target.value)} placeholder="e.g. JBSWY3DPEHPK3PXP"
                       className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 pr-10 text-xs text-white font-mono uppercase focus:outline-none focus:border-[#00dce5]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
-                    <button type="button" onClick={() => setShowSecret(!showSecret)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8e90a2] hover:text-white transition-colors">
+                    <button type="button" onClick={handleToggleFormSecretVisibility} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8e90a2] hover:text-white transition-colors">
                       {showSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
@@ -2569,13 +2708,64 @@ export default function App() {
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">Tag</label>
-                    <select value={formCategory} onChange={e => setFormCategory(e.target.value)}
+                    <select value={formCategory} onChange={e => {
+                      const val = e.target.value;
+                      if (val === '__NEW_TAG__') {
+                        setIsCreatingNewTagInModal(true);
+                        setNewTagNameInModal('');
+                      } else {
+                        setFormCategory(val);
+                        setIsCreatingNewTagInModal(false);
+                      }
+                    }}
                       className="w-full bg-[#1c1b1b] border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 transition-all">
                       {settings.customTags
                         .filter(t => t.toLowerCase() !== 'hide' && t.toLowerCase() !== 'hidden')
                         .concat(isHiddenVaultActive ? ['hidden'] : [])
                         .map(t => <option key={t} value={t} className="bg-[#1c1b1b] text-white">{t}</option>)}
+                      <option value="__NEW_TAG__" className="text-[#00dce5] font-semibold">+ Add New Tag...</option>
                     </select>
+                    {isCreatingNewTagInModal && (
+                      <div className="mt-2 flex gap-2 animate-fade-in">
+                        <input
+                          type="text"
+                          value={newTagNameInModal}
+                          onChange={e => setNewTagNameInModal(e.target.value)}
+                          placeholder="New tag..."
+                          className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 text-[10px] text-white focus:outline-none focus:border-[#00dce5]/60 focus:bg-white/[0.08] transition-all"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const tag = newTagNameInModal.trim().toLowerCase();
+                            if (!tag) return;
+                            if (tag === 'hide' || tag === 'hidden') return;
+                            if (settings.customTags.includes(tag)) {
+                              setFormCategory(tag);
+                              setIsCreatingNewTagInModal(false);
+                              return;
+                            }
+                            setSettings(prev => ({ ...prev, customTags: [...prev.customTags, tag] }));
+                            setFormCategory(tag);
+                            setIsCreatingNewTagInModal(false);
+                            showToast(`Tag "${tag}" created.`, 'success');
+                          }}
+                          className="px-2.5 py-1.5 bg-[#00dce5] text-black text-[9px] font-bold rounded-lg hover:opacity-90 transition-opacity"
+                        >
+                          Add
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsCreatingNewTagInModal(false);
+                            setFormCategory('personal');
+                          }}
+                          className="px-2.5 py-1.5 bg-white/10 text-white text-[9px] font-semibold rounded-lg hover:bg-white/15 transition-all"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">Labels</label>
