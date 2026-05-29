@@ -42,7 +42,9 @@ body {
   background-color: rgba(19, 19, 19, 0.4);
   backdrop-filter: blur(32px);
   -webkit-backdrop-filter: blur(32px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 10px 40px -15px rgba(0, 0, 0, 0.85);
   transition: border-color 0.15s ease-out, background-color 0.15s ease-out;
 }
@@ -52,7 +54,9 @@ body {
   background-color: rgba(19, 19, 19, 0.5);
   backdrop-filter: blur(32px);
   -webkit-backdrop-filter: blur(32px);
-  border: 1px solid rgba(0, 220, 229, 0.2);
+  border: 1px solid rgba(0, 220, 229, 0.15);
+  border-top: 1px solid rgba(0, 220, 229, 0.35);
+  border-left: 1px solid rgba(0, 220, 229, 0.25);
   box-shadow: 0 10px 40px -15px rgba(0, 0, 0, 0.85);
 }
 
