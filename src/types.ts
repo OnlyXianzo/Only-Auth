@@ -22,9 +22,11 @@ export interface HiddenVaultSettings {
 }
 
 export interface AppSettings {
-  passphraseHash: string;       // SHA-256 of passphrase
-  masterKeyHash: string;        // SHA-256 of 256-bit master key
-  pinHash: string;              // SHA-256 of PIN (empty string if not set)
+  passphraseHash?: string;       // SHA-256 of passphrase (legacy, migrated on boot/unlock)
+  masterKeyHash?: string;        // SHA-256 of 256-bit master key (legacy)
+  pinHash?: string;              // SHA-256 of PIN (legacy)
+  authHashes?: string[];         // Zero-Knowledge flat array of all authorized hashes (Argon2id)
+  authMetadata?: Record<string, string>; // Maps each Argon2id hash to its AES-encrypted action metadata payload
   autoRenewInterval: number;
   accountListPlacement: 'right' | 'bottom';
   lastBackupDate: string;

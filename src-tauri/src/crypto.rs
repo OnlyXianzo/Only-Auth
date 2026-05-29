@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use zeroize::Zeroize;
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
-use sha2::{Sha256, Sha512};
+use sha2::{Sha256, Sha512, Digest};
 use std::time::{SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
 use aes_gcm::{
@@ -300,6 +300,53 @@ pub fn set_window_screenshot_protection(window: tauri::Window, protect: bool) ->
     let _ = window;
     let _ = protect;
     Ok(())
+}
+
+#[tauri::command]
+pub fn encrypt_metadata(data: String, key_material: String) -> Result<String, String> {
+    use rand::RngCore;
+    // Derive 32-byte key from key_material using SHA-256
+    let mut hasher = Sha256::new();
+    hasher.update(key_material.as_bytes());
+    let key_bytes = hasher.finalize();
+
+    let cipher = Aes256Gcm::new_from_slice(&key_bytes).map_err(|e| e.to_string())?;
+
+    let mut nonce_bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher.encrypt(nonce, data.as_bytes()).map_err(|e| e.to_string())?;
+
+    let payload = format!(
+        "{}:{}",
+        data_encoding::HEXLOWER.encode(&nonce_bytes),
+        data_encoding::HEXLOWER.encode(&ciphertext)
+    );
+    Ok(payload)
+}
+
+#[tauri::command]
+pub fn decrypt_metadata(encrypted: String, key_material: String) -> Result<String, String> {
+    let parts: Vec<&str> = encrypted.split(':').collect();
+    if parts.len() != 2 {
+        return Err("Invalid encrypted format".to_string());
+    }
+
+    let nonce_bytes = data_encoding::HEXLOWER.decode(parts[0].as_bytes()).map_err(|e| e.to_string())?;
+    let ciphertext = data_encoding::HEXLOWER.decode(parts[1].as_bytes()).map_err(|e| e.to_string())?;
+
+    // Derive 32-byte key from key_material using SHA-256
+    let mut hasher = Sha256::new();
+    hasher.update(key_material.as_bytes());
+    let key_bytes = hasher.finalize();
+
+    let cipher = Aes256Gcm::new_from_slice(&key_bytes).map_err(|e| e.to_string())?;
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let decrypted_bytes = cipher.decrypt(nonce, ciphertext.as_slice()).map_err(|e| e.to_string())?;
+    let decrypted_str = String::from_utf8(decrypted_bytes).map_err(|e| e.to_string())?;
+    Ok(decrypted_str)
 }
 
 #[cfg(test)]

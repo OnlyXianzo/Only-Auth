@@ -321,3 +321,41 @@ export async function setWindowScreenshotProtection(protect: boolean): Promise<v
     }
   }
 }
+
+export async function encryptMetadata(data: string, keyMaterial: string): Promise<string> {
+  const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
+  if (isTauri) {
+    try {
+      return await invoke<string>('encrypt_metadata', { data, keyMaterial });
+    } catch (e) {
+      console.error('Tauri encrypt_metadata failed, using mock fallback:', e);
+    }
+  }
+  // Browser mock fallback: simple base64 with simulated key check tag
+  const hashedKey = await localSha256(keyMaterial);
+  const base64Data = btoa(unescape(encodeURIComponent(data)));
+  return `${hashedKey.slice(0, 8)}:${base64Data}`;
+}
+
+export async function decryptMetadata(encrypted: string, keyMaterial: string): Promise<string> {
+  const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
+  if (isTauri) {
+    try {
+      return await invoke<string>('decrypt_metadata', { encrypted, keyMaterial });
+    } catch (e) {
+      console.error('Tauri decrypt_metadata failed, using mock fallback:', e);
+    }
+  }
+  // Browser mock fallback decryption
+  const parts = encrypted.split(':');
+  if (parts.length !== 2) {
+    throw new Error('Invalid encrypted metadata format');
+  }
+  const keyTag = parts[0];
+  const base64Data = parts[1];
+  const hashedKey = await localSha256(keyMaterial);
+  if (keyTag !== hashedKey.slice(0, 8)) {
+    throw new Error('Failed to decrypt metadata: key mismatch');
+  }
+  return decodeURIComponent(escape(atob(base64Data)));
+}

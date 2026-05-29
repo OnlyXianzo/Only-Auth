@@ -17,7 +17,7 @@ import {
   loadVaultData, saveVaultData,
   argon2idHash, argon2idVerify, secureCompare,
   encryptBackup, decryptBackup, writeAuditLog, readAuditLogs,
-  setWindowScreenshotProtection, BatchInput
+  setWindowScreenshotProtection, encryptMetadata, decryptMetadata, BatchInput
 } from './utils';
 
 // ─── BIP-39 Mini Wordlist (256 common words for demo — real apps use full 2048) ───
@@ -70,6 +70,14 @@ async function sha256(text: string): Promise<string> {
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function createAuthCredential(enteredInput: string, type: 'pin' | 'passphrase' | 'masterKey' | 'duress', action?: 'wipe' | 'fake') {
+  const hash = await argon2idHash(enteredInput);
+  const keyMaterial = await sha256(enteredInput + "OnlyAuthMetadataDerivationSalt2026");
+  const payload = JSON.stringify(action ? { type, action } : { type });
+  const encMeta = await encryptMetadata(payload, keyMaterial);
+  return { hash, encMeta };
 }
 
 // ─── Logo abbreviation helper ───────────────────────────────────────────────
@@ -147,6 +155,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   passphraseHash: '',
   masterKeyHash: '',
   pinHash: '',
+  authHashes: [],
+  authMetadata: {},
   autoRenewInterval: 60,
   accountListPlacement: 'right',
   lastBackupDate: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
@@ -664,6 +674,136 @@ export default function App() {
     };
   }, [showHiddenSetupModal]);
 
+  const verifyAndUnlock = async (input: string, method: 'pin' | 'passphrase') => {
+    let matchedHash: string | null = null;
+    let matchedType: 'pin' | 'passphrase' | 'masterKey' | 'duress' | null = null;
+    let duressAction: 'wipe' | 'fake' | null = null;
+
+    // 1. Verify against Zero-Knowledge multihash array if populated
+    if (settings.authHashes && settings.authHashes.length > 0) {
+      for (const hash of settings.authHashes) {
+        const matched = await argon2idVerify(hash, input);
+        if (matched) {
+          matchedHash = hash;
+          const encMeta = settings.authMetadata?.[hash];
+          if (encMeta) {
+            try {
+              const keyMaterial = await sha256(input + "OnlyAuthMetadataDerivationSalt2026");
+              const decrypted = await decryptMetadata(encMeta, keyMaterial);
+              const meta = JSON.parse(decrypted);
+              matchedType = meta.type;
+              if (meta.type === 'duress') {
+                duressAction = meta.action;
+              }
+            } catch (e) {
+              console.error("Failed to decrypt auth metadata:", e);
+            }
+          }
+          break;
+        }
+      }
+    }
+
+    // 2. Backward compatibility fallback
+    if (!matchedHash) {
+      if (method === 'pin') {
+        if (settings.duressPinHash && settings.duressPinHash !== 'fortified' && await argon2idVerify(settings.duressPinHash, input)) {
+          matchedHash = settings.duressPinHash;
+          matchedType = 'duress';
+          duressAction = settings.duressAction || 'fake';
+        } else if (settings.pinHash && await argon2idVerify(settings.pinHash, input)) {
+          matchedHash = settings.pinHash;
+          matchedType = 'pin';
+        }
+      } else {
+        if (settings.duressPassphraseHash && await argon2idVerify(settings.duressPassphraseHash, input)) {
+          matchedHash = settings.duressPassphraseHash;
+          matchedType = 'duress';
+          duressAction = settings.duressAction || 'fake';
+        } else if (settings.passphraseHash && await argon2idVerify(settings.passphraseHash, input)) {
+          matchedHash = settings.passphraseHash;
+          matchedType = 'passphrase';
+        } else if (settings.masterKeyHash && await argon2idVerify(settings.masterKeyHash, input)) {
+          matchedHash = settings.masterKeyHash;
+          matchedType = 'masterKey';
+        }
+      }
+    }
+
+    if (matchedHash && matchedType) {
+      // SUCCESSFUL MATCH!
+      
+      // Dynamic inline migration to Zero-Knowledge schema if needed
+      let upgradedSettings: Partial<AppSettings> = {};
+      if (!settings.authHashes || !settings.authHashes.includes(matchedHash)) {
+        const cred = await createAuthCredential(input, matchedType === 'duress' ? 'duress' : matchedType, matchedType === 'duress' ? duressAction || 'fake' : undefined);
+        const currentHashes = settings.authHashes || [];
+        const currentMetadata = settings.authMetadata || {};
+        
+        upgradedSettings = {
+          authHashes: [...currentHashes, cred.hash],
+          authMetadata: { ...currentMetadata, [cred.hash]: cred.encMeta }
+        };
+      }
+
+      if (matchedType === 'duress') {
+        await writeAuditLog(`DURESS AUTHENTICATION ENCOUNTERED (${method.toUpperCase()})`, undefined);
+        safeTransition(() => {
+          if (duressAction === 'wipe') {
+            setAccounts(prev => prev.map(a => {
+              const isHidden = a.category.toLowerCase() === 'hide' || a.category.toLowerCase() === 'hidden';
+              return isHidden ? { ...a, secret: '••••••••', category: 'personal' } : a;
+            }));
+            showToast('Vault unlocked.', 'success');
+          } else {
+            setIsFakeVaultActive(true);
+          }
+          setIsLocked(false);
+          setUnlockError('');
+          setUnlockInput('');
+          if (Object.keys(upgradedSettings).length > 0) {
+            setSettings(prev => ({ ...prev, ...upgradedSettings }));
+          }
+        });
+      } else {
+        const derivedKeyHex = await sha256(input + "OnlyAuthAuditLogSalt2026");
+        setDecryptedLogKeyHex(derivedKeyHex);
+        await writeAuditLog(`Vault unlocked successfully (${matchedType})`, derivedKeyHex);
+
+        safeTransition(() => {
+          setIsLocked(false);
+          setUnlockError('');
+          setUnlockInput('');
+          setSettings(prev => ({ 
+            ...prev, 
+            ...upgradedSettings, 
+            pinAttempts: 0 
+          }));
+        });
+      }
+      return true;
+    } else {
+      // FAILED MATCH!
+      const nextAttempts = settings.pinAttempts + 1;
+      const delayMs = Math.min(1000 * Math.pow(2, nextAttempts - 1), 16000);
+      await new Promise(r => setTimeout(r, delayMs));
+
+      await writeAuditLog(`Failed ${method} unlock attempt. Count: ${nextAttempts}`, undefined);
+
+      safeTransition(() => {
+        setSettings(prev => ({ ...prev, pinAttempts: nextAttempts }));
+        if (method === 'pin' && nextAttempts >= 5) {
+          setUnlockError('PIN locked out due to 5 failed attempts. Master passphrase required.');
+          setUnlockMethod('passphrase');
+        } else {
+          setUnlockError(`Incorrect ${method}. Attempt ${nextAttempts}.`);
+        }
+        setUnlockInput('');
+      });
+      return false;
+    }
+  };
+
   // ── Auto-search on startup focus
   useEffect(() => {
     if (!isLocked && settings.forceSearchOnStartup) {
@@ -678,78 +818,11 @@ export default function App() {
   useEffect(() => {
     if (isLocked && unlockMethod === 'pin' && unlockInput.length === 4) {
       const triggerUnlock = async () => {
-        // 1. Check for Duress PIN first
-        if (settings.duressPinHash) {
-          const matchedDuress = await argon2idVerify(settings.duressPinHash, unlockInput);
-          if (matchedDuress) {
-            // Write silent locked tamper log
-            await writeAuditLog('DURESS AUTHENTICATION ENCOUNTERED (PIN)', undefined);
-            
-            safeTransition(() => {
-              if (settings.duressAction === 'wipe') {
-                // Silently scrub the stealth enclave
-                setAccounts(prev => prev.map(a => {
-                  const isHidden = a.category.toLowerCase() === 'hide' || a.category.toLowerCase() === 'hidden';
-                  return isHidden ? { ...a, secret: '••••••••', category: 'personal' } : a;
-                }));
-                showToast('Vault unlocked.', 'success');
-              } else {
-                // Show fake empty vault
-                setIsFakeVaultActive(true);
-              }
-              setIsLocked(false);
-              setUnlockError('');
-              setUnlockInput('');
-            });
-            return;
-          }
-        }
-
-        // 2. Validate normal PIN using Argon2id verifier
-        const matched = await argon2idVerify(settings.pinHash, unlockInput);
-        if (matched) {
-          const derivedKeyHex = await sha256(unlockInput + "OnlyAuthAuditLogSalt2026");
-          setDecryptedLogKeyHex(derivedKeyHex);
-          await writeAuditLog('Vault unlocked successfully (PIN)', derivedKeyHex);
-
-          // Auto-upgrade simple SHA-256 PIN to Argon2id if needed
-          let upgradedSettings = {};
-          if (!settings.pinHash.startsWith('$argon2id$')) {
-            const newHash = await argon2idHash(unlockInput);
-            upgradedSettings = { pinHash: newHash };
-          }
-
-          safeTransition(() => {
-            setIsLocked(false);
-            setUnlockError('');
-            setUnlockInput('');
-            setSettings(prev => ({ ...prev, ...upgradedSettings, pinAttempts: 0 }));
-          });
-        } else {
-          const nextAttempts = settings.pinAttempts + 1;
-          
-          // Enforce Rust-style exponential backoff rate limiting delay in constant time
-          const delayMs = Math.min(1000 * Math.pow(2, nextAttempts - 1), 16000);
-          await new Promise(resolve => setTimeout(resolve, delayMs));
-
-          // Log failed attempt
-          await writeAuditLog(`Failed PIN unlock attempt. Attempts: ${nextAttempts}/5`, undefined);
-
-          safeTransition(() => {
-            setSettings(prev => ({ ...prev, pinAttempts: nextAttempts }));
-            if (nextAttempts >= 5) {
-              setUnlockError('PIN locked out due to 5 failed attempts. Master passphrase required.');
-              setUnlockMethod('passphrase');
-            } else {
-              setUnlockError(`Incorrect PIN. Attempt ${nextAttempts}/5.`);
-            }
-            setUnlockInput('');
-          });
-        }
+        await verifyAndUnlock(unlockInput, 'pin');
       };
       triggerUnlock();
     }
-  }, [unlockInput, unlockMethod, isLocked, settings.pinHash, settings.pinAttempts, settings.duressPinHash, settings.duressAction]);
+  }, [unlockInput, unlockMethod, isLocked, settings.authHashes, settings.pinHash, settings.duressPinHash]);
 
   // ── Recurrent Gratitude Micro-Animation
   useEffect(() => {
@@ -778,23 +851,43 @@ export default function App() {
 
   const handleFinishSetup = async (skipPin = false) => {
     const phrase = setupWords.join(' ');
-    const phraseHash = await argon2idHash(phrase);
-    const keyHash = await argon2idHash(setupMasterKey);
-    let pinHash = '';
     if (!skipPin && setupPin.trim().length >= 4) {
       if (setupPin !== setupPinConfirm) {
         setSetupPinError("PINs don't match.");
         return;
       }
-      pinHash = await argon2idHash(setupPin.trim());
     }
-    
+
+    // 1. Create credentials for Zero-Knowledge multi-hash array
+    const passphraseCred = await createAuthCredential(phrase, 'passphrase');
+    const masterKeyCred = await createAuthCredential(setupMasterKey, 'masterKey');
+
+    const hashes = [passphraseCred.hash, masterKeyCred.hash];
+    const metadata = {
+      [passphraseCred.hash]: passphraseCred.encMeta,
+      [masterKeyCred.hash]: masterKeyCred.encMeta
+    };
+
+    if (!skipPin && setupPin.trim().length >= 4) {
+      const pinCred = await createAuthCredential(setupPin.trim(), 'pin');
+      hashes.push(pinCred.hash);
+      metadata[pinCred.hash] = pinCred.encMeta;
+    }
+
     const derivedKeyHex = await sha256(phrase + "OnlyAuthAuditLogSalt2026");
     setDecryptedLogKeyHex(derivedKeyHex);
     await writeAuditLog('Vault setup completed with hardened Argon2id KDF', derivedKeyHex);
-    
+
     safeTransition(() => {
-      setSettings(prev => ({ ...prev, passphraseHash: phraseHash, masterKeyHash: keyHash, pinHash, pinAttempts: 0 }));
+      setSettings(prev => ({ 
+        ...prev, 
+        authHashes: hashes, 
+        authMetadata: metadata,
+        passphraseHash: '', // Clear legacy hashes
+        masterKeyHash: '',
+        pinHash: '',
+        pinAttempts: 0 
+      }));
       setIsLocked(false);
       // Clean up sensitive setup memories
       setSetupWords([]);
@@ -819,148 +912,7 @@ export default function App() {
     e.preventDefault();
     const input = unlockInput.trim();
     if (!input) return;
-
-    if (unlockMethod === 'passphrase') {
-      // 1. Check for Duress Passphrase first
-      if (settings.duressPassphraseHash) {
-        const matchedDuress = await argon2idVerify(settings.duressPassphraseHash, input);
-        if (matchedDuress) {
-          await writeAuditLog('DURESS AUTHENTICATION ENCOUNTERED (PASSPHRASE)', undefined);
-          safeTransition(() => {
-            if (settings.duressAction === 'wipe') {
-              setAccounts(prev => prev.map(a => {
-                const isHidden = a.category.toLowerCase() === 'hide' || a.category.toLowerCase() === 'hidden';
-                return isHidden ? { ...a, secret: '••••••••', category: 'personal' } : a;
-              }));
-              showToast('Vault unlocked.', 'success');
-            } else {
-              setIsFakeVaultActive(true);
-            }
-            setIsLocked(false);
-            setUnlockError('');
-            setUnlockInput('');
-          });
-          return;
-        }
-      }
-
-      // 2. Validate normal master passphrase or master key hash
-      const matchedPass = await argon2idVerify(settings.passphraseHash, input);
-      const matchedKey = await argon2idVerify(settings.masterKeyHash, input);
-
-      if (matchedPass || matchedKey) {
-        const derivedKeyHex = await sha256(input + "OnlyAuthAuditLogSalt2026");
-        setDecryptedLogKeyHex(derivedKeyHex);
-        await writeAuditLog('Vault unlocked successfully (Passphrase)', derivedKeyHex);
-
-        // Auto-upgrade legacy SHA-256 master passphrase hashes to Argon2id on successful unlock
-        let upgrades: Partial<AppSettings> = {};
-        if (!settings.passphraseHash.startsWith('$argon2id$')) {
-          upgrades.passphraseHash = await argon2idHash(input);
-        }
-        if (!settings.masterKeyHash.startsWith('$argon2id$')) {
-          upgrades.masterKeyHash = await argon2idHash(matchedKey ? input : settings.masterKeyHash);
-        }
-        
-        safeTransition(() => {
-          setIsLocked(false);
-          setUnlockError('');
-          setUnlockInput('');
-          if (Object.keys(upgrades).length > 0) {
-            setSettings(prev => ({ ...prev, ...upgrades }));
-          }
-          if (settings.pinAttempts >= 5 || settings.pinHash) {
-            setSettings(prev => ({ ...prev, pinHash: '', pinAttempts: 0 }));
-          }
-        });
-        return;
-      }
-      
-      // Enforce failed backoff and logging
-      const nextAttempts = settings.pinAttempts + 1;
-      const delayMs = Math.min(1000 * Math.pow(2, nextAttempts - 1), 16000);
-      await new Promise(r => setTimeout(r, delayMs));
-      
-      await writeAuditLog(`Failed passphrase unlock attempt. Count: ${nextAttempts}`, undefined);
-      setSettings(prev => ({ ...prev, pinAttempts: nextAttempts }));
-      setUnlockError('Incorrect passphrase or master key. Try again.');
-      setUnlockInput('');
-    } else if (unlockMethod === 'pin') {
-      if (!settings.pinHash) {
-        setUnlockError('No PIN set. Use your passphrase.');
-        setUnlockMethod('passphrase');
-        return;
-      }
-      if (settings.pinAttempts >= 5) {
-        setUnlockError('PIN locked out. Passphrase required.');
-        setUnlockMethod('passphrase');
-        return;
-      }
-
-      // 1. Check for Duress PIN first
-      if (settings.duressPinHash) {
-        const matchedDuress = await argon2idVerify(settings.duressPinHash, input);
-        if (matchedDuress) {
-          await writeAuditLog('DURESS AUTHENTICATION ENCOUNTERED (PIN)', undefined);
-          safeTransition(() => {
-            if (settings.duressAction === 'wipe') {
-              setAccounts(prev => prev.map(a => {
-                const isHidden = a.category.toLowerCase() === 'hide' || a.category.toLowerCase() === 'hidden';
-                return isHidden ? { ...a, secret: '••••••••', category: 'personal' } : a;
-              }));
-              showToast('Vault unlocked.', 'success');
-            } else {
-              setIsFakeVaultActive(true);
-            }
-            setIsLocked(false);
-            setUnlockError('');
-            setUnlockInput('');
-          });
-          return;
-        }
-      }
-
-      // 2. Validate normal PIN
-      const matched = await argon2idVerify(settings.pinHash, input);
-      if (matched) {
-        const derivedKeyHex = await sha256(input + "OnlyAuthAuditLogSalt2026");
-        setDecryptedLogKeyHex(derivedKeyHex);
-        await writeAuditLog('Vault unlocked successfully (PIN)', derivedKeyHex);
-
-        let upgradedSettings = {};
-        if (!settings.pinHash.startsWith('$argon2id$')) {
-          const newHash = await argon2idHash(input);
-          upgradedSettings = { pinHash: newHash };
-        }
-
-        safeTransition(() => {
-          setIsLocked(false);
-          setUnlockError('');
-          setUnlockInput('');
-          setSettings(prev => ({ ...prev, ...upgradedSettings, pinAttempts: 0 }));
-        });
-        return;
-      } else {
-        const nextAttempts = settings.pinAttempts + 1;
-        
-        // Enforce backoff delay on failed attempt
-        const delayMs = Math.min(1000 * Math.pow(2, nextAttempts - 1), 16000);
-        await new Promise(r => setTimeout(r, delayMs));
-
-        await writeAuditLog(`Failed PIN unlock attempt. Count: ${nextAttempts}/5`, undefined);
-
-        safeTransition(() => {
-          setSettings(prev => ({ ...prev, pinAttempts: nextAttempts }));
-          if (nextAttempts >= 5) {
-            setUnlockError('PIN locked out due to 5 failed attempts. Master passphrase required.');
-            setUnlockMethod('passphrase');
-          } else {
-            setUnlockError(`Incorrect PIN. Attempt ${nextAttempts}/5.`);
-          }
-          setUnlockInput('');
-        });
-      }
-    }
+    await verifyAndUnlock(input, unlockMethod === 'pin' ? 'pin' : 'passphrase');
   };
 
   const handleBiometricUnlock = async () => {
@@ -2452,7 +2404,13 @@ export default function App() {
                           type="button"
                           onClick={() => {
                             if (confirm('Remove Duress PIN?')) {
-                              setSettings(prev => ({ ...prev, duressPinHash: '', duressPassphraseHash: '' }));
+                              setSettings(prev => ({ 
+                                ...prev, 
+                                duressPinHash: '', 
+                                duressPassphraseHash: '',
+                                authHashes: [],
+                                authMetadata: {}
+                              }));
                               showToast('Duress PIN removed.', 'info');
                             }
                           }}
@@ -3469,8 +3427,16 @@ export default function App() {
                   return;
                 }
                 try {
-                  const hash = await argon2idHash(duressSetupPin);
-                  setSettings(prev => ({ ...prev, duressPinHash: hash }));
+                  const cred = await createAuthCredential(duressSetupPin, 'duress', settings.duressAction || 'fake');
+                  const currentHashes = settings.authHashes || [];
+                  const currentMetadata = settings.authMetadata || {};
+
+                  setSettings(prev => ({ 
+                    ...prev, 
+                    authHashes: [...currentHashes, cred.hash],
+                    authMetadata: { ...currentMetadata, [cred.hash]: cred.encMeta },
+                    duressPinHash: 'fortified'
+                  }));
                   setShowDuressSetup(false);
                   setDuressSetupPin('');
                   setDuressSetupConfirm('');
