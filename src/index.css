@@ -44,6 +44,7 @@ body {
   -webkit-backdrop-filter: blur(32px);
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 10px 40px -15px rgba(0, 0, 0, 0.85);
+  transition: border-color 0.15s ease-out, background-color 0.15s ease-out;
 }
 
 /* Accent-tinted glass for focused card */
@@ -52,13 +53,12 @@ body {
   backdrop-filter: blur(32px);
   -webkit-backdrop-filter: blur(32px);
   border: 1px solid rgba(0, 220, 229, 0.2);
-  box-shadow: 0 10px 40px -10px rgba(0, 220, 229, 0.08);
+  box-shadow: 0 10px 40px -15px rgba(0, 0, 0, 0.85);
 }
 
 /* Progress bar — cyan with glow */
 .progress-bar-inner {
   transition: width 1s linear, background-color 0.5s ease;
-  box-shadow: 0 0 12px rgba(0, 229, 255, 0.4);
 }
 
 /* Scrollbar — minimal white */

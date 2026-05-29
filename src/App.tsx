@@ -388,6 +388,10 @@ export default function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pinInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const formSecretRef = useRef<string>('');
+
+  // Sync the ref whenever formSecret state changes — survives modal transitions
+  useEffect(() => { formSecretRef.current = formSecret; }, [formSecret]);
   
   // Icon Picker state
   const [showIconPicker, setShowIconPicker] = useState(false);
@@ -422,7 +426,7 @@ export default function App() {
       setVerificationInput("");
       setFormSecret("");
     };
-  }, [activeTag, isLocked, isAddModalOpen, isVerificationModalOpen, setupStep]);
+  }, [activeTag, isLocked, isAddModalOpen, setupStep]);
 
   // Scrub settings input buffers when settings sub-tab changes
   useEffect(() => {
@@ -742,6 +746,7 @@ export default function App() {
   const openAddModal = () => safeTransition(() => {
     setEditingAccount(null);
     setFormName(''); setFormEmail(''); setFormSecret(''); setShowSecret(false);
+    formSecretRef.current = '';
     setFormNotes(''); setFormCategory(activeTag === 'all' ? 'personal' : activeTag);
     setFormIsPinned(false); setFormLogoType('custom'); setFormTagsString('');
     setShowIconPicker(false);
@@ -751,6 +756,7 @@ export default function App() {
   const openEditModal = (account: Account) => safeTransition(() => {
     setEditingAccount(account);
     setFormName(account.name); setFormEmail(account.email); setFormSecret(account.secret); setShowSecret(false);
+    formSecretRef.current = account.secret;
     setFormNotes(account.notes); setFormCategory(account.category);
     setFormIsPinned(account.isPinned); setFormLogoType(account.logoType);
     setFormTagsString(account.tags?.join(', ') || '');
@@ -809,9 +815,10 @@ export default function App() {
     }
   };
 
-  const saveAccountConfirmed = () => safeTransition(() => {
+  const saveAccountConfirmed = () => {
     const parsedTags = formTagsString.split(',').map(t => t.trim()).filter(Boolean);
-    const sanitizedSecret = formSecret.trim().toUpperCase();
+    const resolvedSecret = formSecret || formSecretRef.current;
+    const sanitizedSecret = resolvedSecret.trim().toUpperCase();
     if (editingAccount) {
       const updated = accounts.map(acc => acc.id === editingAccount.id
         ? { ...acc, name: formName, email: formEmail, secret: sanitizedSecret, notes: formNotes, category: formCategory, isPinned: formIsPinned, logoType: formLogoType, tags: parsedTags }
@@ -833,7 +840,8 @@ export default function App() {
     }
     setIsAddModalOpen(false);
     setEditingAccount(null);
-  });
+    formSecretRef.current = '';
+  };
 
   const deleteAccountConfirmed = (id: string) => safeTransition(() => {
     const filtered = accounts.filter(a => a.id !== id);
@@ -1313,7 +1321,7 @@ export default function App() {
                           key={idx}
                           className={`w-4 h-4 rounded-full border-2 transition-all duration-200 ${
                             isFilled
-                              ? 'bg-[#00dce5] border-[#00dce5] shadow-[0_0_10px_rgba(0,229,255,0.5)] scale-110'
+                              ? 'bg-[#00dce5] border-[#00dce5] scale-110'
                               : 'bg-transparent border-white/20'
                           }`}
                         />
@@ -1427,7 +1435,7 @@ export default function App() {
       </AnimatePresence>
 
       {/* ── SIDEBAR ──────────────────────────────────────────────────────── */}
-      <aside className={`fixed inset-y-0 left-0 z-50 flex flex-col h-full bg-black/30 backdrop-blur-[32px] border-r ${isHiddenVaultActive ? 'border-amber-500/20 shadow-[0_0_15px_rgba(245,158,11,0.05)]' : 'border-white/5 shadow-2xl'} w-[var(--sidebar-width)]
+      <aside className={`fixed inset-y-0 left-0 z-50 flex flex-col h-full bg-black/30 backdrop-blur-[32px] border-r ${isHiddenVaultActive ? 'border-amber-500/20' : 'border-white/5 shadow-2xl'} w-[var(--sidebar-width)]
         ${isResizing ? '' : 'transition-all duration-300'}
         ${mobileDrawerOpen ? 'translate-x-0 !w-72' : '-translate-x-full md:translate-x-0'}`}>
 
@@ -1462,7 +1470,7 @@ export default function App() {
               const Icon = tag === 'all' ? Layers : tag === 'work' ? Briefcase : tag === 'personal' ? LockOpen : Tag;
               return (
                 <button key={tag} onClick={() => safeTransition(() => { setActiveTag(tag); setMobileDrawerOpen(false); })}
-                  className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all border-l-2 ${
+                  className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all duration-150 ease-out border-l-[3px] ${
                     isActive ? `bg-white/5 text-white ${isHiddenVaultActive ? 'border-amber-500 text-amber-400 font-semibold' : 'border-[#00dce5] text-white font-semibold'}` : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
                   } ${sidebarCollapsed ? 'justify-center px-0 border-l-0 rounded-full w-10 h-10 mx-auto' : ''}`}>
                   <Icon className="w-4 h-4 shrink-0" />
@@ -1489,7 +1497,7 @@ export default function App() {
               const isActive = activeTag === tab.value;
               return (
                 <button onClick={() => safeTransition(() => { setActiveTag(tab.value); setMobileDrawerOpen(false); })}
-                  className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all border-l-2 ${
+                  className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all duration-150 ease-out border-l-[3px] ${
                     isActive ? 'bg-white/5 text-white border-[#00dce5] font-semibold' : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
                   } ${sidebarCollapsed ? 'justify-center px-0 border-l-0 rounded-full w-10 h-10 mx-auto' : ''}`}>
                   <Icon className="w-4 h-4 shrink-0" />
@@ -1500,7 +1508,7 @@ export default function App() {
 
             {/* Import - Top-level sibling button */}
             <button onClick={() => safeTransition(() => { setActiveTag('settings'); setSettingsSubTab('import-export'); setMobileDrawerOpen(false); })}
-              className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all border-l-2 ${
+              className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all duration-150 ease-out border-l-[3px] ${
                 activeTag === 'settings' && settingsSubTab === 'import-export' ? 'bg-white/5 text-white border-[#00dce5] font-semibold' : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
               } ${sidebarCollapsed ? 'justify-center px-0 border-l-0 rounded-full w-10 h-10 mx-auto' : ''}`}
               title={sidebarCollapsed ? "Import" : undefined}>
@@ -1510,7 +1518,7 @@ export default function App() {
 
             {/* Export - Top-level sibling button */}
             <button onClick={() => safeTransition(() => { setActiveTag('settings'); setSettingsSubTab('import-export'); setMobileDrawerOpen(false); })}
-              className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all border-l-2 ${
+              className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all duration-150 ease-out border-l-[3px] ${
                 activeTag === 'settings' && settingsSubTab === 'import-export' ? 'bg-white/5 text-white border-[#00dce5] font-semibold' : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
               } ${sidebarCollapsed ? 'justify-center px-0 border-l-0 rounded-full w-10 h-10 mx-auto' : ''}`}
               title={sidebarCollapsed ? "Export" : undefined}>
@@ -1524,7 +1532,7 @@ export default function App() {
               const isActive = activeTag === tab.value;
               return (
                 <button key={tab.value} onClick={() => safeTransition(() => { setActiveTag(tab.value); setMobileDrawerOpen(false); })}
-                  className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all border-l-2 ${
+                  className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all duration-150 ease-out border-l-[3px] ${
                     isActive ? 'bg-white/5 text-white border-[#00dce5] font-semibold' : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
                   } ${sidebarCollapsed ? 'justify-center px-0 border-l-0 rounded-full w-10 h-10 mx-auto' : ''}`}>
                   <Icon className="w-4 h-4 shrink-0" />
@@ -1605,7 +1613,7 @@ export default function App() {
             {/* Add account button */}
             {isVaultTab && (
               <button onClick={openAddModal}
-                className="w-9 h-9 rounded-full bg-[#00dce5] text-black flex items-center justify-center shadow-[0_0_20px_rgba(0,229,255,0.3)] hover:scale-105 transition-all">
+                className="w-9 h-9 rounded-full bg-[#00dce5] text-black flex items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all duration-150 ease-out">
                 <Plus className="w-5 h-5 stroke-[3px]" />
               </button>
             )}
@@ -1630,7 +1638,7 @@ export default function App() {
                       initial={{ opacity: 0, y: -6, scale: 0.98 }}
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: -6, scale: 0.98 }}
-                      className="border border-amber-500/40 bg-amber-950/10 rounded-2xl p-3.5 flex items-center justify-between shadow-[0_0_20px_rgba(245,158,11,0.08)] transition-all"
+                      className="border border-amber-500/40 bg-amber-950/10 rounded-2xl p-3.5 flex items-center justify-between transition-all"
                     >
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-xl bg-amber-500/15 flex items-center justify-center border border-amber-500/25">
@@ -1743,7 +1751,7 @@ export default function App() {
                           const isSelected = focusedAccountId === acc.id;
                           return (
                             <div key={acc.id} onClick={() => setFocusedAccountId(acc.id)}
-                              className={`glass-panel ${c ? 'min-w-[200px] p-3' : 'min-w-[240px] p-4'} rounded-2xl flex flex-col gap-3 cursor-pointer hover:bg-white/5 transition-all shrink-0 ${isSelected ? (isHiddenVaultActive ? 'border border-amber-500/50 shadow-[0_0_10px_rgba(245,158,11,0.2)]' : 'border border-[#00dce5]/40') : ''}`}>
+                              className={`glass-panel ${c ? 'min-w-[200px] p-3' : 'min-w-[240px] p-4'} rounded-2xl flex flex-col gap-3 cursor-pointer hover:bg-white/5 transition-all shrink-0 ${isSelected ? (isHiddenVaultActive ? 'border border-amber-500/50' : 'border border-[#00dce5]/40') : ''}`}>
                               <div className="flex items-center gap-2">
                                 <div className="shrink-0">
                                   <BrandLogo name={acc.name} logoType={acc.logoType} className={`${c ? 'w-8 h-8 text-xs' : 'w-10 h-10 text-xs'}`} />
@@ -1788,10 +1796,10 @@ export default function App() {
                       const aCode = totpCodes[acc.id] || '------';
                       return (
                         <motion.div key={acc.id} onClick={() => setFocusedAccountId(acc.id)}
-                          whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }}
-                          className={`glass-panel ${c ? 'rounded-xl p-2.5' : 'rounded-2xl p-4'} flex items-center justify-between cursor-pointer transition-all group border-l-2 ${
+                          whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} transition={{ duration: 0.1, ease: "easeOut" }}
+                          className={`glass-panel ${c ? 'rounded-xl p-2.5' : 'rounded-2xl p-4'} flex items-center justify-between cursor-pointer transition-all duration-150 ease-out group border-l-[3px] ${
                             isFocused
-                              ? `${isHiddenVaultActive ? 'border-l-amber-500 bg-amber-500/5 shadow-[0_0_10px_rgba(245,158,11,0.1)]' : 'border-l-[#00dce5] bg-white/5'} border-t-transparent border-r-transparent border-b-transparent`
+                              ? `${isHiddenVaultActive ? 'border-l-amber-500 bg-amber-500/5' : 'border-l-[#00dce5] bg-white/5'} border-t-transparent border-r-transparent border-b-transparent`
                               : `border-l-transparent border-t-white/8 border-r-white/8 border-b-white/8 ${isHiddenVaultActive ? 'hover:border-l-amber-500/60' : 'hover:border-l-[#00dce5]/60'} hover:border-t-transparent hover:border-r-transparent hover:border-b-transparent hover:bg-white/5`
                           }`}>
                           <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -2535,12 +2543,12 @@ export default function App() {
                   <div className="space-y-1.5">
                     <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">Issuer</label>
                     <input type="text" required value={formName} onChange={e => setFormName(e.target.value)} placeholder="e.g. GitHub"
-                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:shadow-[0_0_12px_rgba(0,229,255,0.15)] focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
+                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">Account</label>
                     <input type="text" required value={formEmail} onChange={e => setFormEmail(e.target.value)} placeholder="e.g. user@example.com"
-                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:shadow-[0_0_12px_rgba(0,229,255,0.15)] focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
+                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
                   </div>
                 </div>
 
@@ -2551,7 +2559,7 @@ export default function App() {
                   </label>
                   <div className="relative">
                     <input type={showSecret ? "text" : "password"} required value={formSecret} onChange={e => setFormSecret(e.target.value)} placeholder="e.g. JBSWY3DPEHPK3PXP"
-                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 pr-10 text-xs text-white font-mono uppercase focus:outline-none focus:border-[#00dce5]/60 focus:shadow-[0_0_12px_rgba(0,229,255,0.15)] focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
+                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 pr-10 text-xs text-white font-mono uppercase focus:outline-none focus:border-[#00dce5]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
                     <button type="button" onClick={() => setShowSecret(!showSecret)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8e90a2] hover:text-white transition-colors">
                       {showSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
@@ -2562,7 +2570,7 @@ export default function App() {
                   <div className="space-y-1.5">
                     <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">Tag</label>
                     <select value={formCategory} onChange={e => setFormCategory(e.target.value)}
-                      className="w-full bg-[#1c1b1b] border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:shadow-[0_0_12px_rgba(0,229,255,0.15)] transition-all">
+                      className="w-full bg-[#1c1b1b] border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 transition-all">
                       {settings.customTags
                         .filter(t => t.toLowerCase() !== 'hide' && t.toLowerCase() !== 'hidden')
                         .concat(isHiddenVaultActive ? ['hidden'] : [])
@@ -2572,12 +2580,12 @@ export default function App() {
                   <div className="space-y-1.5">
                     <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">Labels</label>
                     <input type="text" value={formTagsString} onChange={e => setFormTagsString(e.target.value)} placeholder="prod, core"
-                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:shadow-[0_0_12px_rgba(0,229,255,0.15)] focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
+                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
                   </div>
                 </div>
 
                 <textarea rows={2} value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="Notes (optional)"
-                  className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:shadow-[0_0_12px_rgba(0,229,255,0.15)] focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
+                  className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
 
                 <label className="flex items-center gap-2.5 bg-white/5 p-3 rounded-xl border border-white/8 cursor-pointer">
                   <input type="checkbox" checked={formIsPinned} onChange={e => setFormIsPinned(e.target.checked)} className="rounded border-white/20 text-[#00dce5] focus:ring-[#00dce5] bg-transparent" />
@@ -2592,7 +2600,7 @@ export default function App() {
                       Delete
                     </button>
                   )}
-                  <button type="submit" className="px-5 py-2.5 text-xs bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white font-semibold rounded-xl hover:opacity-90 transition-opacity">
+                  <button type="submit" className="px-5 py-2.5 text-xs bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white font-semibold rounded-xl hover:opacity-90 active:scale-[0.98] transition-all duration-150 ease-out">
                     {editingAccount ? 'Save Changes' : 'Add Account'}
                   </button>
                 </div>
@@ -2607,7 +2615,7 @@ export default function App() {
         {showHiddenSetupModal && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md glass-panel rounded-2xl p-6 border border-amber-500/20 shadow-[0_0_30px_rgba(245,158,11,0.1)] relative">
+              className="w-full max-w-md glass-panel rounded-2xl p-6 border border-amber-500/20 relative">
               <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-amber-500 to-transparent" />
               
               <div className="flex items-center gap-3 mb-4">
@@ -2656,7 +2664,7 @@ export default function App() {
                         value={hiddenVaultSetupInput}
                         onChange={e => setHiddenVaultSetupInput(e.target.value)}
                         placeholder={hiddenVaultSetupMethod === 'pin' ? 'e.g. 9999' : 'e.g. correct horse battery staple'}
-                        className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500/50 focus:shadow-[0_0_12px_rgba(245,158,11,0.15)] focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]"
+                        className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500/50 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]"
                       />
                     </div>
                     <div className="space-y-1.5">
@@ -2671,7 +2679,7 @@ export default function App() {
                         value={hiddenVaultSetupConfirm}
                         onChange={e => setHiddenVaultSetupConfirm(e.target.value)}
                         placeholder={hiddenVaultSetupMethod === 'pin' ? 'Re-enter PIN' : 'Re-enter Passphrase'}
-                        className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500/50 focus:shadow-[0_0_12px_rgba(245,158,11,0.15)] focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]"
+                        className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500/50 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]"
                       />
                     </div>
                   </>
@@ -2696,7 +2704,7 @@ export default function App() {
                     Cancel
                   </button>
                   <button type="submit"
-                    className="px-5 py-2.5 text-xs bg-gradient-to-r from-amber-600 to-amber-500 text-white font-semibold rounded-xl hover:opacity-90 transition-opacity shadow-[0_0_15px_rgba(245,158,11,0.2)]">
+                    className="px-5 py-2.5 text-xs bg-gradient-to-r from-amber-600 to-amber-500 text-white font-semibold rounded-xl hover:opacity-90 transition-opacity">
                     {hiddenVaultSetupMethod === 'biometrics' ? 'Register & Setup' : 'Complete Setup'}
                   </button>
                 </div>
@@ -2749,9 +2757,9 @@ export default function App() {
               transition={{ duration: 0.2 }}
               className={`pointer-events-auto flex items-start gap-3 px-4 py-3 rounded-2xl border backdrop-blur-xl shadow-2xl max-w-[320px] ${
                 toast.type === 'success'
-                  ? 'bg-emerald-950/60 border-emerald-500/30 shadow-[0_0_20px_rgba(16,185,129,0.08)]'
+                  ? 'bg-emerald-950/60 border-emerald-500/30'
                   : toast.type === 'error'
-                  ? 'bg-red-950/60 border-red-500/30 shadow-[0_0_20px_rgba(239,68,68,0.08)]'
+                  ? 'bg-red-950/60 border-red-500/30'
                   : 'bg-[#0a0a0a]/80 border-white/10'
               }`}
             >

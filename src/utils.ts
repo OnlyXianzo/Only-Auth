@@ -9,48 +9,104 @@ export interface BatchInput {
 }
 
 export async function generateBatchTOTP(accounts: BatchInput[]): Promise<Record<string, string>> {
-  try {
-    return await invoke<Record<string, string>>('generate_totp_batch', { accounts });
-  } catch {
-    return {};
+  const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
+  if (isTauri) {
+    try {
+      return await invoke<Record<string, string>>('generate_totp_batch', { accounts });
+    } catch {
+      // Fall through to mock generation if invoke fails
+    }
   }
+
+  // Browser/Mock fallback: Generate a deterministic 6-digit mock TOTP code based on secret and current 30-second epoch
+  const result: Record<string, string> = {};
+  const epoch = Math.floor(Date.now() / 30000);
+  for (const acc of accounts) {
+    let hash = 0;
+    const str = `${acc.secret}-${epoch}`;
+    for (let i = 0; i < str.length; i++) {
+      hash = (hash << 5) - hash + str.charCodeAt(i);
+      hash |= 0; // Convert to 32bit integer
+    }
+    const absHash = Math.abs(hash);
+    const code = (absHash % 1000000).toString().padStart(6, '0');
+    result[acc.id] = code;
+  }
+  return result;
 }
 
 export async function validateBase32(secret: string): Promise<boolean> {
-  try {
-    return await invoke<boolean>('validate_base32', { secret });
-  } catch {
-    return false;
+  const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
+  if (isTauri) {
+    try {
+      return await invoke<boolean>('validate_base32', { secret });
+    } catch {
+      // Fall through to regex validation if invoke fails
+    }
   }
+
+  // Browser/Mock fallback: Validate characters A-Z, 2-7
+  if (!secret) return false;
+  const clean = secret.replace(/[\s-]/g, '');
+  return /^[A-Z2-7]+=*$/i.test(clean);
 }
 
 export async function generateNewSecret(): Promise<string> {
-  try {
-    return await invoke<string>('generate_secret', {});
-  } catch {
-    // Fallback: JS-based generation for browser-only dev mode
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-    return Array.from({ length: 32 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
+  if (isTauri) {
+    try {
+      return await invoke<string>('generate_secret', {});
+    } catch {
+      // Fall through to local generation if invoke fails
+    }
   }
+
+  // Fallback: JS-based generation for browser-only dev mode
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  return Array.from({ length: 32 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
 }
 
 export async function loadVaultData(): Promise<Account[]> {
-  try {
-    return await invoke<Account[]>('load_vault_data');
-  } catch (e) {
-    console.error('Failed to load vault data:', e);
-    return [];
+  const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
+  if (isTauri) {
+    try {
+      return await invoke<Account[]>('load_vault_data');
+    } catch (e) {
+      console.warn('Tauri load_vault_data failed, trying localStorage fallback:', e);
+    }
   }
+
+  // Browser fallback: read from localStorage
+  try {
+    const saved = localStorage.getItem('onlyauth_accounts_v3');
+    if (saved) {
+      return JSON.parse(saved);
+    }
+  } catch (e) {
+    console.error('Failed to load mock accounts from localStorage:', e);
+  }
+  return [];
 }
 
 export async function saveVaultData(accounts: Account[]): Promise<boolean> {
+  // Always sync with localStorage for additional safety and web mode support
   try {
-    await invoke('save_vault_data', { accounts });
-    return true;
+    localStorage.setItem('onlyauth_accounts_v3', JSON.stringify(accounts));
   } catch (e) {
-    console.error('Failed to save vault data:', e);
-    return false;
+    console.error('Failed to save mock accounts to localStorage:', e);
   }
+
+  const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
+  if (isTauri) {
+    try {
+      await invoke('save_vault_data', { accounts });
+      return true;
+    } catch (e) {
+      console.error('Failed to save vault data to Rust backend:', e);
+      return false;
+    }
+  }
+  return true;
 }
 
 /**

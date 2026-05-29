@@ -16,3 +16,9 @@ GEMINI.md
 public/brands/_data/
 public/brands/icons/
 public/brands/icons_svg/
+.claude-flow/
+.claude/
+.mcp.json
+.swarm/
+CLAUDE.md
+ruvector.db
