@@ -374,6 +374,7 @@ export default function App() {
   const [setupPin, setSetupPin] = useState('');
   const [setupPinConfirm, setSetupPinConfirm] = useState('');
   const [setupPinError, setSetupPinError] = useState('');
+  const [setupPinPhase, setSetupPinPhase] = useState<'enter' | 'confirm'>('enter');
   const [showSetupKey, setShowSetupKey] = useState(false);
 
   // Unlock
@@ -557,6 +558,7 @@ export default function App() {
   const pinInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const formSecretRef = useRef<string>('');
+  const isVerifyingRef = useRef(false);
 
   // Sync the ref whenever formSecret state changes — survives modal transitions
   useEffect(() => { formSecretRef.current = formSecret; }, [formSecret]);
@@ -747,6 +749,8 @@ export default function App() {
   }, [showHiddenSetupModal]);
 
   const verifyAndUnlock = async (input: string, method: 'pin' | 'passphrase') => {
+    if (isVerifyingRef.current) return;
+    isVerifyingRef.current = true;
     let matchedHash: string | null = null;
     let matchedType: 'pin' | 'passphrase' | 'masterKey' | 'duress' | null = null;
     let duressAction: 'wipe' | 'fake' | null = null;
@@ -788,7 +792,11 @@ export default function App() {
           matchedType = 'pin';
         }
       } else {
-        if (settings.duressPassphraseHash && await argon2idVerify(settings.duressPassphraseHash, input)) {
+        if (settings.duressPinHash && settings.duressPinHash !== 'fortified' && await argon2idVerify(settings.duressPinHash, input)) {
+          matchedHash = settings.duressPinHash;
+          matchedType = 'duress';
+          duressAction = settings.duressAction || 'fake';
+        } else if (settings.duressPassphraseHash && await argon2idVerify(settings.duressPassphraseHash, input)) {
           matchedHash = settings.duressPassphraseHash;
           matchedType = 'duress';
           duressAction = settings.duressAction || 'fake';
@@ -822,10 +830,7 @@ export default function App() {
         await writeAuditLog(`DURESS AUTHENTICATION ENCOUNTERED (${method.toUpperCase()})`, undefined);
         safeTransition(() => {
           if (duressAction === 'wipe') {
-            setAccounts(prev => prev.map(a => {
-              const isHidden = a.category.toLowerCase() === 'hide' || a.category.toLowerCase() === 'hidden';
-              return isHidden ? { ...a, secret: '••••••••', category: 'personal' } : a;
-            }));
+            setAccounts(prev => prev.map(a => ({ ...a, secret: '••••••••' })));
             showToast('Vault unlocked.', 'success');
           } else {
             setIsFakeVaultActive(true);
@@ -868,12 +873,17 @@ export default function App() {
           }));
         });
       }
+      isVerifyingRef.current = false;
       return true;
     } else {
       // FAILED MATCH!
       const nextAttempts = settings.pinAttempts + 1;
-      const delayMs = Math.min(1000 * Math.pow(2, nextAttempts - 1), 16000);
-      await new Promise(r => setTimeout(r, delayMs));
+
+      // Exponential delay only for PIN attempts (prevent brute-force)
+      if (method === 'pin') {
+        const delayMs = Math.min(1000 * Math.pow(2, nextAttempts - 1), 16000);
+        await new Promise(r => setTimeout(r, delayMs));
+      }
 
       await writeAuditLog(`Failed ${method} unlock attempt. Count: ${nextAttempts}`, undefined);
 
@@ -887,6 +897,7 @@ export default function App() {
         }
         setUnlockInput('');
       });
+      isVerifyingRef.current = false;
       return false;
     }
   };
@@ -934,6 +945,10 @@ export default function App() {
 
   const handleRevealContinue = () => safeTransition(() => {
     setSetupStep('set-pin');
+    setSetupPin('');
+    setSetupPinConfirm('');
+    setSetupPinError('');
+    setSetupPinPhase('enter');
   });
 
   const handleFinishSetup = async (skipPin = false) => {
@@ -1525,26 +1540,152 @@ export default function App() {
 
           {setupStep === 'set-pin' && (
             <motion.div key="pin" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}
-              className="w-full max-w-md mx-4 glass-panel rounded-3xl p-8 flex flex-col gap-6 relative overflow-hidden z-10">
+              className="w-full max-w-sm mx-4 glass-panel rounded-3xl p-8 flex flex-col items-center gap-6 relative overflow-hidden z-10">
               <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-[#2d5bff] to-transparent" />
               <div className="text-center space-y-2">
-                <h2 className="font-display text-2xl font-semibold text-white">Set a Quick PIN</h2>
-                <p className="text-sm text-[#c4c5d9] leading-relaxed">Optional — use for faster daily unlock. Your passphrase remains the master recovery method.</p>
+                <h2 className="font-display text-2xl font-semibold text-white">
+                  {setupPinPhase === 'enter' ? 'Set a Quick PIN' : 'Confirm Your PIN'}
+                </h2>
+                <p className="text-sm text-[#c4c5d9] leading-relaxed">
+                  {setupPinPhase === 'enter'
+                    ? 'Optional — use for faster daily unlock.'
+                    : 'Re-enter your PIN to confirm.'}
+                </p>
               </div>
-              <div className="space-y-3">
-                <input type="password" value={setupPin} onChange={e => setSetupPin(e.target.value)} placeholder="PIN (min 4 digits)"
-                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#00dce5]/50 transition-all" />
-                <input type="password" value={setupPinConfirm} onChange={e => setSetupPinConfirm(e.target.value)} placeholder="Confirm PIN"
-                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#00dce5]/50 transition-all" />
-                {setupPinError && <p className="text-xs text-red-400">{setupPinError}</p>}
+
+              {/* Hidden input for keyboard capture */}
+              <input
+                id="setup-pin-hidden"
+                type="password"
+                pattern="\d*"
+                inputMode="numeric"
+                maxLength={8}
+                value={setupPinPhase === 'enter' ? setupPin : setupPinConfirm}
+                onChange={e => {
+                  const val = e.target.value.replace(/\D/g, '').substring(0, 8);
+                  if (setupPinPhase === 'enter') {
+                    setSetupPin(val);
+                    if (val.length >= 4) setSetupPinPhase('confirm');
+                  } else {
+                    setSetupPinConfirm(val);
+                  }
+                  setSetupPinError('');
+                }}
+                autoFocus
+                className="absolute inset-0 opacity-0 cursor-default z-10 w-full h-8"
+              />
+
+              {/* PIN Dot Display */}
+              <div className="flex gap-4 py-2 cursor-pointer relative z-20" onClick={() => {
+                const hidden = document.querySelector<HTMLInputElement>(`#setup-pin-hidden`);
+                hidden?.focus();
+              }}>
+                {Array.from({ length: 6 }).map((_, idx) => {
+                  const currentPin = setupPinPhase === 'enter' ? setupPin : setupPinConfirm;
+                  const isFilled = currentPin.length > idx;
+                  return (
+                    <motion.div
+                      key={idx}
+                      initial={{ scale: 0.8 }}
+                      animate={{
+                        scale: isFilled ? 1.1 : 1,
+                        backgroundColor: isFilled ? 'rgba(0, 220, 229, 1)' : 'rgba(255,255,255,0.08)',
+                        borderColor: isFilled ? 'rgba(0, 220, 229, 1)' : 'rgba(255,255,255,0.15)',
+                      }}
+                      transition={{ duration: 0.15, ease: 'easeOut' }}
+                      className={`w-3.5 h-3.5 rounded-full border-2 transition-all duration-200 ${
+                        isFilled ? 'scale-110' : ''
+                      }`}
+                    />
+                  );
+                })}
               </div>
-              <button onClick={() => handleFinishSetup(false)}
-                className="w-full py-3 rounded-xl bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white font-semibold text-sm hover:opacity-90 transition-opacity">
-                Set PIN & Enter Vault →
-              </button>
-              <button onClick={() => handleFinishSetup(true)} className="text-xs text-[#8e90a2] hover:text-white text-center transition-colors">
-                Skip for now
-              </button>
+
+              {/* Numeric Keypad */}
+              <div className="grid grid-cols-3 gap-3 w-full max-w-[220px] mx-auto relative z-20">
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
+                  <button key={num} type="button"
+                    onClick={() => {
+                      const hidden = document.querySelector<HTMLInputElement>(`#setup-pin-hidden`);
+                      if (setupPinPhase === 'enter' && setupPin.length < 8) {
+                        setSetupPin(prev => prev + num);
+                        if (setupPin.length + 1 >= 4) {
+                          setTimeout(() => setSetupPinPhase('confirm'), 200);
+                        }
+                      } else if (setupPinPhase === 'confirm' && setupPinConfirm.length < 8) {
+                        setSetupPinConfirm(prev => prev + num);
+                      }
+                      hidden?.focus();
+                    }}
+                    className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-base font-semibold text-white flex items-center justify-center mx-auto">
+                    {num}
+                  </button>
+                ))}
+                <button type="button"
+                  onClick={() => {
+                    if (setupPinPhase === 'enter') {
+                      setSetupPin('');
+                    } else {
+                      setSetupPinConfirm('');
+                    }
+                  }}
+                  className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-[9px] font-bold text-[#8e90a2] hover:text-white flex items-center justify-center mx-auto">
+                  CLEAR
+                </button>
+                <button type="button"
+                  onClick={() => {
+                    const hidden = document.querySelector<HTMLInputElement>(`#setup-pin-hidden`);
+                    if (setupPinPhase === 'enter' && setupPin.length < 8) {
+                      setSetupPin(prev => prev + '0');
+                      if (setupPin.length + 1 >= 4) {
+                        setTimeout(() => setSetupPinPhase('confirm'), 200);
+                      }
+                    } else if (setupPinPhase === 'confirm' && setupPinConfirm.length < 8) {
+                      setSetupPinConfirm(prev => prev + '0');
+                    }
+                    hidden?.focus();
+                  }}
+                  className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-base font-semibold text-white flex items-center justify-center mx-auto">
+                  0
+                </button>
+                <button type="button"
+                  onClick={() => {
+                    if (setupPinPhase === 'enter') {
+                      setSetupPin(prev => prev.slice(0, -1));
+                    } else {
+                      setSetupPinConfirm(prev => prev.slice(0, -1));
+                    }
+                  }}
+                  className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-xs font-bold text-[#8e90a2] hover:text-white flex items-center justify-center mx-auto">
+                  ⌫
+                </button>
+              </div>
+
+              {/* Back to enter phase */}
+              {setupPinPhase === 'confirm' && (
+                <button type="button" onClick={() => {
+                  setSetupPinPhase('enter');
+                  setSetupPin('');
+                  setSetupPinConfirm('');
+                  setSetupPinError('');
+                }} className="text-[10px] text-[#8e90a2] hover:text-white transition-colors">
+                  ← Re-enter PIN
+                </button>
+              )}
+
+              {setupPinError && (
+                <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-xs text-red-400">{setupPinError}</motion.p>
+              )}
+
+              <div className="flex flex-col items-center gap-3 w-full">
+                <button onClick={() => handleFinishSetup(false)}
+                  className="w-full py-3 rounded-xl bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white font-semibold text-sm hover:opacity-90 transition-opacity">
+                  {setupPinPhase === 'enter' ? 'Skip PIN →' : 'Set PIN & Enter Vault →'}
+                </button>
+                <button onClick={() => handleFinishSetup(true)} className="text-xs text-[#8e90a2] hover:text-white transition-colors">
+                  Skip for now
+                </button>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -1620,12 +1761,17 @@ export default function App() {
                     {Array.from({ length: 4 }).map((_, idx) => {
                       const isFilled = unlockInput.length > idx;
                       return (
-                        <div
+                        <motion.div
                           key={idx}
-                          className={`w-4 h-4 rounded-full border-2 transition-all duration-200 ${
-                            isFilled
-                              ? 'bg-[#00dce5] border-[#00dce5] scale-110'
-                              : 'bg-transparent border-white/20'
+                          initial={{ scale: 0.8 }}
+                          animate={{
+                            scale: isFilled ? 1.1 : 1,
+                            backgroundColor: isFilled ? 'rgba(0, 220, 229, 1)' : 'rgba(255,255,255,0.08)',
+                            borderColor: isFilled ? 'rgba(0, 220, 229, 1)' : 'rgba(255,255,255,0.15)',
+                          }}
+                          transition={{ duration: 0.15, ease: 'easeOut' }}
+                          className={`w-3.5 h-3.5 rounded-full border-2 transition-all duration-200 ${
+                            isFilled ? 'scale-110' : ''
                           }`}
                         />
                       );
@@ -1635,42 +1781,33 @@ export default function App() {
                   {/* Visual Numeric Keypad for Touch/Mobile */}
                   <div className="grid grid-cols-3 gap-3 w-full max-w-[220px] mx-auto mt-2 relative z-20">
                     {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
-                      <button
-                        key={num}
-                        type="button"
+                      <button key={num} type="button"
                         onClick={() => {
                           if (unlockInput.length < 4) {
                             setUnlockInput(prev => prev + num);
                           }
                         }}
-                        className="w-11 h-11 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-sm font-semibold text-white flex items-center justify-center mx-auto"
-                      >
+                        className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-base font-semibold text-white flex items-center justify-center mx-auto">
                         {num}
                       </button>
                     ))}
-                    <button
-                      type="button"
+                    <button type="button"
                       onClick={() => setUnlockInput('')}
-                      className="w-11 h-11 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-[8px] font-bold text-[#8e90a2] hover:text-white flex items-center justify-center mx-auto"
-                    >
+                      className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-[9px] font-bold text-[#8e90a2] hover:text-white flex items-center justify-center mx-auto">
                       CLEAR
                     </button>
-                    <button
-                      type="button"
+                    <button type="button"
                       onClick={() => {
                         if (unlockInput.length < 4) {
                           setUnlockInput(prev => prev + '0');
                         }
                       }}
-                      className="w-11 h-11 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-sm font-semibold text-white flex items-center justify-center mx-auto"
-                    >
+                      className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-base font-semibold text-white flex items-center justify-center mx-auto">
                       0
                     </button>
-                    <button
-                      type="button"
+                    <button type="button"
                       onClick={() => setUnlockInput(prev => prev.slice(0, -1))}
-                      className="w-11 h-11 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-xs font-bold text-[#8e90a2] hover:text-white flex items-center justify-center mx-auto"
-                    >
+                      className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-xs font-bold text-[#8e90a2] hover:text-white flex items-center justify-center mx-auto">
                       ⌫
                     </button>
                   </div>
@@ -2032,7 +2169,7 @@ export default function App() {
                   )}
 
                   {focusedAccount ? (
-                    <div className={`glass-panel-accent rounded-3xl relative overflow-hidden focus-card-transition group border-l-4 ${isHiddenVaultActive ? 'border-l-amber-500' : 'border-l-[#00dce5]'}`}
+                    <div className={`glass-panel-accent rounded-3xl relative overflow-hidden focus-card-transition group border-l-4 ${isHiddenVaultActive ? 'border-l-amber-500 shadow-[4px_0_20px_-6px_rgba(251,191,36,0.25)]' : 'border-l-[#00dce5] shadow-[4px_0_20px_-6px_rgba(0,220,229,0.25)]'}`}
                       style={{ padding: c ? '1.25rem' : '2rem' }}>
                       <div className={`card-bg-blur ${isHiddenVaultActive ? 'bg-amber-500/10' : 'bg-[#00dce5]/10'}`} />
 
@@ -2147,10 +2284,9 @@ export default function App() {
                           const cardColor = acc.color || getServiceHex(acc.logoType);
                           return (
                             <div key={acc.id} onClick={() => setFocusedAccountId(acc.id)}
-                              className={`glass-panel ${c ? 'min-w-[200px] p-3' : 'min-w-[240px] p-4'} rounded-2xl flex flex-col gap-3 cursor-pointer hover:bg-white/5 transition-all shrink-0 border-l-4 ${
+                              className={`glass-panel ${c ? 'min-w-[200px] p-3' : 'min-w-[240px] p-4'} rounded-2xl flex flex-col gap-3 cursor-pointer hover:bg-white/5 transition-all shrink-0 ${
                                 isSelected ? (isHiddenVaultActive ? 'bg-amber-500/5 ring-1 ring-amber-500/20' : 'bg-white/5 ring-1 ring-white/10') : ''
-                              }`}
-                              style={{ borderLeftColor: cardColor }}>
+                              }`}>
                               <div className="flex items-center gap-2">
                                 <div className="shrink-0">
                                   <BrandLogo name={acc.name} logoType={acc.logoType} className={`${c ? 'w-8 h-8 text-xs' : 'w-10 h-10 text-xs'}`} />
@@ -2197,12 +2333,11 @@ export default function App() {
                       return (
                         <motion.div key={acc.id} onClick={() => setFocusedAccountId(acc.id)}
                           whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} transition={{ duration: 0.1, ease: "easeOut" }}
-                          className={`glass-panel ${c ? 'rounded-xl p-2.5' : 'rounded-2xl p-4'} flex items-center justify-between cursor-pointer transition-all duration-150 ease-out group border-l-4 ${
+                          className={`glass-panel ${c ? 'rounded-xl p-2.5' : 'rounded-2xl p-4'} flex items-center justify-between cursor-pointer transition-all duration-150 ease-out group ${
                             isFocused
                               ? `${isHiddenVaultActive ? 'bg-amber-500/5 ring-1 ring-amber-500/20' : 'bg-white/5 ring-1 ring-white/10'}`
                               : `hover:bg-white/5`
-                          }`}
-                          style={{ borderLeftColor: cardColor }}>
+                          }`}>
                           <div className="flex items-center gap-3 min-w-0 flex-1">
                             <div className="shrink-0">
                               <BrandLogo name={acc.name} logoType={acc.logoType} className={`${c ? 'w-8 h-8 text-xs' : 'w-11 h-11 text-xs'}`} />
@@ -2766,12 +2901,25 @@ export default function App() {
 
                     <div className="border-t border-white/8 pt-5 space-y-3">
                       <h4 className="text-sm font-semibold text-white">Change PIN</h4>
-                      <form onSubmit={handleUpdatePinSubmit} className="space-y-3 max-w-xs">
-                        <input type="password" value={newPinField} onChange={e => setNewPinField(e.target.value)} placeholder="New PIN (min 4 digits)"
-                          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#00dce5]/50 transition-all" />
-                        <input type="password" value={newPinConfirm} onChange={e => setNewPinConfirm(e.target.value)} placeholder="Confirm PIN"
-                          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#00dce5]/50 transition-all" />
-                        <button type="submit" className="px-5 py-2.5 text-xs bg-white/10 text-white font-semibold rounded-xl hover:bg-white/15 transition-all border border-white/10">Update PIN</button>
+                      <p className="text-[10px] text-[#8e90a2]">Set a 4-8 digit PIN for faster daily unlock. Current passphrase verification required.</p>
+                      <form onSubmit={handleUpdatePinSubmit} className="flex flex-wrap gap-3 items-end">
+                        <div className="relative flex-1 min-w-[160px]">
+                          <input type="password" value={newPinField} onChange={e => setNewPinField(e.target.value)}
+                            placeholder="New PIN (4-8 digits)"
+                            pattern="\d*"
+                            inputMode="numeric"
+                            maxLength={8}
+                            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#00dce5]/50 transition-all placeholder-[#8e90a2] font-mono tracking-widest" />
+                        </div>
+                        <div className="relative flex-1 min-w-[160px]">
+                          <input type="password" value={newPinConfirm} onChange={e => setNewPinConfirm(e.target.value)}
+                            placeholder="Confirm PIN"
+                            pattern="\d*"
+                            inputMode="numeric"
+                            maxLength={8}
+                            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#00dce5]/50 transition-all placeholder-[#8e90a2] font-mono tracking-widest" />
+                        </div>
+                        <button type="submit" className="px-5 py-2.5 text-xs bg-[#00dce5]/10 text-[#00dce5] font-semibold rounded-xl hover:bg-[#00dce5]/20 transition-all border border-[#00dce5]/20 shrink-0">Update PIN</button>
                       </form>
                     </div>
                   </div>
