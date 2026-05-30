@@ -229,6 +229,7 @@ export default function App() {
   // ── Persistent state
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [isAccountsLoaded, setIsAccountsLoaded] = useState(false);
+  const [decryptedLogKeyHex, setDecryptedLogKeyHex] = useState<string>('');
 
   const [settings, setSettings] = useState<AppSettings>(() => {
     const saved = localStorage.getItem('onlyauth_settings_v3');
@@ -275,7 +276,6 @@ export default function App() {
   const [backupPassword, setBackupPassword] = useState<string>('');
   const [importBackupData, setImportBackupData] = useState<string>('');
   const [auditLogs, setAuditLogs] = useState<string[]>([]);
-  const [decryptedLogKeyHex, setDecryptedLogKeyHex] = useState<string>('');
   const [showDuressSetup, setShowDuressSetup] = useState<boolean>(false);
   const [duressSetupPin, setDuressSetupPin] = useState<string>('');
   const [duressSetupConfirm, setDuressSetupConfirm] = useState<string>('');
