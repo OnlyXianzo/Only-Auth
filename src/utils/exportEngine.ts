@@ -1,4 +1,5 @@
 import { Account, AppSettings } from '../types';
+import { generateQR } from './qrcode';
 
 // ─── Type Definitions ──────────────────────────────────────────────────────────
 export interface ExportPayload {
@@ -114,7 +115,11 @@ export function exportPurifiedJSON(accounts: Account[], settings: Partial<AppSet
     ...rest,
     id: _id,
   }));
-  return JSON.stringify({ accounts: purified, settings: stripCredentialHashes(settings) }, null, 2);
+  const payload: ExportPayload = {
+    accounts: purified,
+    settings: stripCredentialHashes(settings),
+  };
+  return JSON.stringify(payload, null, 2);
 }
 
 export function exportPlainTextURI(accounts: Account[]): string {
@@ -127,49 +132,87 @@ export function exportPlainTextURI(accounts: Account[]): string {
 export function exportHTML(accounts: Account[]): string {
   const rows = accounts
     .filter(a => a.secret?.trim())
-    .map(a => {
+    .map((a, idx) => {
+      const label = encodeURIComponent(a.email || a.name);
       const uri = accountToOTPAuthURI(a);
+      const qrSvg = generateQR(uri, 4);
+      const displayName = a.email ? `${escHtml(a.email)}` : escHtml(a.name);
+      const displayLabel = a.email ? escHtml(a.name) : '';
       return `
-    <div class="entry">
-      <div class="header">
-        <span class="issuer">${escHtml(a.name)}</span>
-        <span class="email">${escHtml(a.email)}</span>
+    <div class="card">
+      <div class="card-header">
+        <div class="identity">
+          <span class="account-label">${displayName}</span>
+          ${displayLabel ? `<span class="account-issuer">${displayLabel}</span>` : ''}
+        </div>
+        <div class="type-badge">TOTP</div>
       </div>
-      <div class="secret">${a.secret}</div>
-      <div class="meta">${a.digits || 6} digits &middot; ${a.period || 30}s &middot; ${a.algorithm || 'SHA1'}</div>
-      <div class="uri">${escHtml(uri)}</div>
+      <div class="card-body">
+        <div class="details">
+          <div class="detail-row"><span class="detail-label">Type</span><span class="detail-value">totp</span></div>
+          <div class="detail-row"><span class="detail-label">Algorithm</span><span class="detail-value">${escHtml((a.algorithm || 'SHA1').toLowerCase())}</span></div>
+          <div class="detail-row"><span class="detail-label">Digits</span><span class="detail-value">${a.digits || 6}</span></div>
+          <div class="detail-row"><span class="detail-label">Period</span><span class="detail-value">${a.period || 30}s</span></div>
+          <div class="detail-row secret-row"><span class="detail-label">Secret</span><span class="detail-value secret-value">${escHtml(a.secret)}</span></div>
+          <div class="detail-row uri-row"><span class="detail-label">URI</span><span class="detail-value uri-value">${escHtml(uri)}</span></div>
+        </div>
+        <div class="qr-section">
+          ${qrSvg}
+        </div>
+      </div>
     </div>`;
     })
     .join('\n');
+
+  const dateStr = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Only Auth — Exported Vault</title>
+<title>Only Auth — OTP Data Export</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { background: #0a0a0a; color: #e5e2e1; font-family: 'SF Mono', 'Fira Code', monospace; padding: 2rem; }
-.container { max-width: 720px; margin: 0 auto; }
-h1 { font-size: 1.25rem; color: #00dce5; margin-bottom: 0.25rem; }
-.sub { color: #8e90a2; font-size: 0.75rem; margin-bottom: 2rem; }
-.entry { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 1rem; margin-bottom: 0.75rem; }
-.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
-.issuer { font-weight: 700; color: #fff; font-size: 0.875rem; }
-.email { color: #8e90a2; font-size: 0.75rem; }
-.secret { font-size: 0.75rem; color: #00dce5; word-break: break-all; margin-bottom: 0.25rem; }
-.meta { font-size: 0.625rem; color: #8e90a2; }
-.uri { font-size: 0.625rem; color: #555; word-break: break-all; margin-top: 0.25rem; padding-top: 0.25rem; border-top: 1px solid rgba(255,255,255,0.05); }
-.stats { margin-top: 1.5rem; font-size: 0.75rem; color: #8e90a2; text-align: center; }
+body { background: #0c0c0e; color: #e5e2e1; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'SF Mono', 'Fira Code', monospace; padding: 1.5rem; }
+.container { max-width: 860px; margin: 0 auto; }
+.header-section { text-align: center; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 1.5rem; margin-bottom: 2rem; }
+.header-brand { font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.2em; color: #8e90a2; }
+.header-title { font-size: 1.25rem; font-weight: 600; color: #00dce5; margin-top: 0.25rem; }
+.header-sub { font-size: 0.7rem; color: #8e90a2; margin-top: 0.5rem; line-height: 1.6; }
+.header-date { font-size: 0.65rem; color: #555; margin-top: 0.75rem; }
+.card { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.07); border-radius: 16px; padding: 1.25rem; margin-bottom: 1rem; }
+.card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem; }
+.account-label { font-size: 0.9rem; font-weight: 600; color: #fff; }
+.account-issuer { font-size: 0.7rem; color: #8e90a2; display: block; margin-top: 0.15rem; }
+.type-badge { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.1em; padding: 0.25rem 0.6rem; background: rgba(0,220,229,0.08); border: 1px solid rgba(0,220,229,0.2); border-radius: 6px; color: #00dce5; font-weight: 600; }
+.card-body { display: flex; gap: 1.5rem; align-items: flex-start; }
+.details { flex: 1; min-width: 0; }
+.detail-row { display: flex; justify-content: space-between; align-items: center; padding: 0.35rem 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.detail-row:last-of-type { border-bottom: none; }
+.detail-label { font-size: 0.65rem; color: #8e90a2; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 500; }
+.detail-value { font-size: 0.7rem; color: #e5e2e1; font-weight: 500; }
+.secret-value { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.6rem; color: #00dce5; word-break: break-all; max-width: 280px; text-align: right; }
+.uri-value { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.55rem; color: #555; word-break: break-all; max-width: 280px; text-align: right; }
+.qr-section { flex-shrink: 0; }
+.qr-section svg { width: 96px; height: 96px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.06); display: block; }
+.footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid rgba(255,255,255,0.06); text-align: center; }
+.footer-warn { font-size: 0.6rem; color: #8e90a2; line-height: 1.6; }
+@media (max-width: 640px) { .card-body { flex-direction: column; align-items: center; } .details { width: 100%; } }
 </style>
 </head>
 <body>
 <div class="container">
-<h1>Only Auth &mdash; Exported Vault</h1>
-<p class="sub">${accounts.length} account${accounts.length !== 1 ? 's' : ''} &middot; Generated ${new Date().toISOString().slice(0, 10)}</p>
+<div class="header-section">
+<p class="header-brand">Only Auth by The Only</p>
+<p style="font-size:0.6rem;color:#666;margin-top:0.15rem;"><a href="https://github.com/OnlyXianzo/Only-Auth" target="_blank" style="color:#8e90a2;text-decoration:none;display:inline-flex;align-items:center;gap:4px;"><svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> github.com/OnlyXianzo/Only-Auth</a></p>
+<h1 class="header-title">Only Auth — OTP Data Export</h1>
+<p class="header-date">${dateStr}</p>
+</div>
 ${rows}
-<div class="stats">Securely delete this file after use. Treat all secrets as sensitive.</div>
+<div class="footer">
+<p class="footer-warn">This file contains sensitive two-factor authentication secrets.<br>Keep it encrypted and offline. Delete immediately after use.<br>Generated by Only Auth — ${accounts.length} account${accounts.length !== 1 ? 's' : ''}</p>
+</div>
 </div>
 </body>
 </html>`;

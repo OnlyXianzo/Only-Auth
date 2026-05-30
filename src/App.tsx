@@ -22,8 +22,7 @@ import {
 import {
   exportPurifiedJSON, exportPlainTextURI, exportHTML,
   buildSealedPayload, parseSealedPayload,
-  parseOnlyAuthJSON, parseEnteAuthJSON, parseBitwardenJSON,
-  parseGoogleAuthJSON, parseOTPAuthBatch,
+  parseOnlyAuthJSON, parseOTPAuthBatch,
 } from './utils/exportEngine';
 
 // ─── BIP-39 Mini Wordlist (256 common words for demo — real apps use full 2048) ───
@@ -535,7 +534,7 @@ export default function App() {
   const [isVerificationModalOpen, setIsVerificationModalOpen] = useState(false);
   const [verificationInput, setVerificationInput] = useState('');
   const [verificationError, setVerificationError] = useState('');
-  const [pendingAction, setPendingAction] = useState<{ type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock'; data?: any } | null>(null);
+  const [pendingAction, setPendingAction] = useState<{ type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock' | 'export'; data?: any } | null>(null);
   const [showVerificationInput, setShowVerificationInput] = useState(false);
 
   // Add/Edit form
@@ -565,6 +564,8 @@ export default function App() {
   // Icon Picker state
   const [showIconPicker, setShowIconPicker] = useState(false);
   const [isSettingsUnlocked, setIsSettingsUnlocked] = useState(false);
+  const [pendingExportFormat, setPendingExportFormat] = useState<'purified-json' | 'plain-text' | 'html' | null>(null);
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
   // Settings sub-states
   const [settingsSubTab, setSettingsSubTab] = useState<'layout' | 'profile' | 'passphrase' | 'tags' | 'import-export' | 'hardware' | 'app-lock'>('layout');
@@ -1070,7 +1071,7 @@ export default function App() {
     setShowSecret(prev => !prev);
   };
 
-  const triggerVerifyAction = (type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock', data?: any) => safeTransition(() => {
+  const triggerVerifyAction = (type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock' | 'export', data?: any) => safeTransition(() => {
     setPendingAction({ type, data });
     setVerificationInput('');
     setVerificationError('');
@@ -1099,6 +1100,9 @@ export default function App() {
         if (pendingAction?.type === 'settings-unlock') {
           setIsSettingsUnlocked(true);
           setActiveTag('settings');
+        } else if (pendingAction?.type === 'export') {
+          const fmt = pendingAction.data as 'purified-json' | 'plain-text' | 'html';
+          doExport(fmt);
         } else if (pendingAction?.type === 'save') {
           saveAccountConfirmed();
         } else if (pendingAction?.type === 'delete') {
@@ -1276,7 +1280,12 @@ export default function App() {
   };
 
   // ── Backup / Import & Export
-  const handleExport = (format: 'purified-json' | 'plain-text' | 'html') => {
+  const triggerExport = (format: 'purified-json' | 'plain-text' | 'html') => {
+    setPendingExportFormat(format);
+    setIsExportModalOpen(true);
+  };
+
+  const doExport = (format: 'purified-json' | 'plain-text' | 'html') => {
     const extMap = { 'purified-json': '.json', 'plain-text': '.txt', 'html': '.html' };
     const contentMap = {
       'purified-json': () => exportPurifiedJSON(accounts, settings),
@@ -1313,62 +1322,7 @@ export default function App() {
     reader.readAsText(file);
   };
 
-  const handleImportEnteJSON = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; if (!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => {
-      try {
-        const result = parseEnteAuthJSON(ev.target?.result as string);
-        if (result.accounts.length === 0) {
-          showToast(result.warnings[0] || 'No valid TOTP secrets found.', 'error');
-          return;
-        }
-        safeTransition(() => {
-          setAccounts(prev => [...result.accounts, ...prev]);
-          showToast(`Imported ${result.accounts.length} account${result.accounts.length !== 1 ? 's' : ''} from Ente Auth.`, 'success');
-        });
-      } catch { showToast('Failed to parse Ente JSON. Ensure it is fully decrypted.', 'error'); }
-    };
-    reader.readAsText(file);
-  };
-
-  const handleImportBitwardenJSON = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; if (!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => {
-      try {
-        const result = parseBitwardenJSON(ev.target?.result as string);
-        if (result.accounts.length === 0) {
-          showToast(result.warnings[0] || 'No valid TOTP secrets found.', 'error');
-          return;
-        }
-        safeTransition(() => {
-          setAccounts(prev => [...result.accounts, ...prev]);
-          showToast(`Imported ${result.accounts.length} account${result.accounts.length !== 1 ? 's' : ''} from Bitwarden.`, 'success');
-        });
-      } catch { showToast('Failed to parse Bitwarden JSON. Ensure it is a valid decrypted export.', 'error'); }
-    };
-    reader.readAsText(file);
-  };
-
-  const handleImportGoogleAuthJSON = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; if (!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => {
-      try {
-        const result = parseGoogleAuthJSON(ev.target?.result as string);
-        if (result.accounts.length === 0) {
-          showToast(result.warnings[0] || 'No valid TOTP parameters found.', 'error');
-          return;
-        }
-        safeTransition(() => {
-          setAccounts(prev => [...result.accounts, ...prev]);
-          showToast(`Imported ${result.accounts.length} account${result.accounts.length !== 1 ? 's' : ''} from Google Auth.`, 'success');
-        });
-      } catch { showToast('Failed to parse Google Auth JSON.', 'error'); }
-    };
-    reader.readAsText(file);
-  };
+  // (Ente Auth, Bitwarden, Google Auth JSON import removed — use universal otpauth:// URI import instead)
 
   // ── Passphrase / PIN / Master Key updates (current passphrase verification required)
   const handleRegeneratePassphrase = async () => {
@@ -2871,7 +2825,7 @@ export default function App() {
                         </p>
                         
                         <div className="space-y-2">
-                          {/* Only Auth Import */}
+                          {/* Only Auth JSON Import (preserves settings) */}
                           <div className="relative">
                             <input type="file" accept=".json" onChange={handleImportOnlyAuth} className="hidden" id="onlyauth-import-input" />
                             <label htmlFor="onlyauth-import-input"
@@ -2881,37 +2835,7 @@ export default function App() {
                             </label>
                           </div>
 
-                          {/* Ente Auth Import */}
-                          <div className="relative">
-                            <input type="file" accept=".json" onChange={handleImportEnteJSON} className="hidden" id="ente-import-input" />
-                            <label htmlFor="ente-import-input"
-                              className="w-full h-10 px-4 rounded-xl border border-white/10 hover:bg-white/5 transition-all text-xs font-semibold flex items-center justify-between text-white cursor-pointer">
-                              <span>Ente Auth Decrypted JSON</span>
-                              <ChevronRight className="w-3.5 h-3.5 text-[#8e90a2]" />
-                            </label>
-                          </div>
-
-                          {/* Bitwarden Import */}
-                          <div className="relative">
-                            <input type="file" accept=".json" onChange={handleImportBitwardenJSON} className="hidden" id="bw-import-input" />
-                            <label htmlFor="bw-import-input"
-                              className="w-full h-10 px-4 rounded-xl border border-white/10 hover:bg-white/5 transition-all text-xs font-semibold flex items-center justify-between text-white cursor-pointer">
-                              <span>Bitwarden Decrypted JSON</span>
-                              <ChevronRight className="w-3.5 h-3.5 text-[#8e90a2]" />
-                            </label>
-                          </div>
-
-                          {/* Google Auth Import */}
-                          <div className="relative">
-                            <input type="file" accept=".json" onChange={handleImportGoogleAuthJSON} className="hidden" id="google-import-input" />
-                            <label htmlFor="google-import-input"
-                              className="w-full h-10 px-4 rounded-xl border border-white/10 hover:bg-white/5 transition-all text-xs font-semibold flex items-center justify-between text-white cursor-pointer">
-                              <span>Google Auth Decrypted JSON</span>
-                              <ChevronRight className="w-3.5 h-3.5 text-[#8e90a2]" />
-                            </label>
-                          </div>
-
-                          {/* otpauth:// URI Import */}
+                          {/* Universal otpauth:// URI Import (Ente, Bitwarden, Google Auth, etc.) */}
                           <div className="relative">
                             <input type="file" accept=".txt,.uri" onChange={async (e) => {
                               const file = e.target.files?.[0]; if (!file) return;
@@ -2992,21 +2916,21 @@ export default function App() {
                         </p>
 
                         <div className="space-y-2.5">
-                          <button onClick={() => handleExport('purified-json')}
+                          <button onClick={() => triggerExport('purified-json')}
                             className="w-full h-10 px-4 rounded-xl bg-[#00dce5] text-black hover:opacity-90 transition-all text-xs font-semibold flex items-center justify-between">
-                            <span>Purified JSON (no hashes)</span>
+                            <span>Export Purified JSON (incl. settings)</span>
                             <Download className="w-3.5 h-3.5" />
                           </button>
 
-                          <button onClick={() => handleExport('plain-text')}
+                          <button onClick={() => triggerExport('plain-text')}
                             className="w-full h-10 px-4 rounded-xl border border-white/10 hover:bg-white/5 transition-all text-xs font-semibold flex items-center justify-between text-white">
-                            <span>Plain Text URI Matrix (.txt)</span>
+                            <span>Export URI Matrix (.txt)</span>
                             <Download className="w-3.5 h-3.5" />
                           </button>
 
-                          <button onClick={() => handleExport('html')}
+                          <button onClick={() => triggerExport('html')}
                             className="w-full h-10 px-4 rounded-xl border border-white/10 hover:bg-white/5 transition-all text-xs font-semibold flex items-center justify-between text-white">
-                            <span>Offline HTML Index</span>
+                            <span>Export HTML Index + QR Codes</span>
                             <Download className="w-3.5 h-3.5" />
                           </button>
 
@@ -3721,6 +3645,56 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* ── EXPORT CONFIRMATION MODAL ────────────────────────────────────── */}
+      <AnimatePresence>
+        {isExportModalOpen && pendingExportFormat && (
+          <div className="fixed inset-0 z-[65] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md glass-panel rounded-2xl p-6 border border-white/8">
+              <div className="flex items-center gap-3 mb-4">
+                <Download className="w-5 h-5 text-[#00dce5] shrink-0" />
+                <h3 className="font-display font-semibold text-white text-base">Confirm Export</h3>
+              </div>
+
+              <div className="space-y-3 mb-5">
+                <p className="text-xs text-[#c4c5d9] leading-relaxed">
+                  You are about to export <span className="text-white font-semibold">{accounts.length}</span> account{accounts.length !== 1 ? 's' : ''} as a <span className="text-[#00dce5] font-semibold">{pendingExportFormat === 'purified-json' ? 'Purified JSON' : pendingExportFormat === 'plain-text' ? 'URI Matrix (.txt)' : 'HTML Index'}</span> file.
+                </p>
+
+                <div className="bg-white/5 border border-white/10 rounded-xl p-3.5 space-y-2">
+                  <div className="flex justify-between text-xs"><span className="text-[#8e90a2]">Format</span><span className="text-white font-mono">{pendingExportFormat}</span></div>
+                  <div className="flex justify-between text-xs"><span className="text-[#8e90a2]">Accounts</span><span className="text-white font-mono">{accounts.length}</span></div>
+                  {pendingExportFormat === 'purified-json' && (
+                    <div className="flex justify-between text-xs"><span className="text-[#8e90a2]">Settings included</span><span className="text-white font-mono">Yes (hashes stripped)</span></div>
+                  )}
+                  {pendingExportFormat === 'html' && (
+                    <div className="flex justify-between text-xs"><span className="text-[#8e90a2]">QR codes</span><span className="text-white font-mono">1 per account</span></div>
+                  )}
+                </div>
+
+                <div className="bg-amber-950/20 border border-amber-500/20 rounded-xl p-3">
+                  <p className="text-[11px] text-amber-400/90 leading-relaxed">
+                    <strong>⚠ Disclosure:</strong> This file contains plaintext TOTP secrets. Anyone with access can generate valid 2FA codes for your accounts. Keep it encrypted, transfer via secure channels only, and delete immediately after use. Only Auth does not store your export data.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex gap-2 justify-end pt-1 border-t border-white/8">
+                <button type="button" onClick={() => { setIsExportModalOpen(false); setPendingExportFormat(null); }}
+                  className="px-3 py-1.5 text-xs text-[#8e90a2] hover:text-white font-semibold">Cancel</button>
+                <button type="button" onClick={() => {
+                  setIsExportModalOpen(false);
+                  triggerVerifyAction('export', pendingExportFormat);
+                }} className="px-5 py-1.5 text-xs bg-[#00dce5] text-black font-semibold rounded-lg hover:opacity-90 transition-opacity">
+                  Continue & Verify
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* ── TOAST NOTIFICATIONS ──────────────────────────────────────────── */}
       <div className="fixed bottom-6 right-6 z-[100] flex flex-col gap-2 pointer-events-none">
         <AnimatePresence>
