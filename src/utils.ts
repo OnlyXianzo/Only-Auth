@@ -9,29 +9,66 @@ export interface BatchInput {
   algorithm?: string;
 }
 
+// ─── RFC 6238-compliant base32 decoder ────────────────────────────────────────
+function base32Decode(encoded: string): Uint8Array {
+  const cleaned = encoded.replace(/[\s-=]/g, '').toUpperCase();
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = 0;
+  let bitCount = 0;
+  const bytes: number[] = [];
+  for (const char of cleaned) {
+    const idx = alphabet.indexOf(char);
+    if (idx === -1) continue;
+    bits = (bits << 5) | idx;
+    bitCount += 5;
+    if (bitCount >= 8) {
+      bitCount -= 8;
+      bytes.push((bits >> bitCount) & 0xFF);
+      bits &= (1 << bitCount) - 1;
+    }
+  }
+  return new Uint8Array(bytes);
+}
+
+// ─── RFC 6238 TOTP via Web Crypto API (browser fallback) ──────────────────────
+async function rfc6238TOTP(secret: string, digits: number, period: number, algorithm: string): Promise<string> {
+  const keyBytes = base32Decode(secret);
+  const now = Math.floor(Date.now() / 1000);
+  const counter = Math.floor(now / period);
+  const counterBuf = new ArrayBuffer(8);
+  const view = new DataView(counterBuf);
+  view.setBigUint64(0, BigInt(counter));
+
+  const hashAlgo = algorithm === 'SHA256' ? 'SHA-256' : algorithm === 'SHA512' ? 'SHA-512' : 'SHA-1';
+  const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: hashAlgo }, false, ['sign']);
+  const hmacRaw = await crypto.subtle.sign('HMAC', cryptoKey, counterBuf);
+  const hmac = new Uint8Array(hmacRaw);
+
+  const offset = hmac[hmac.length - 1] & 0x0F;
+  const binary = ((hmac[offset] & 0x7F) << 24) | ((hmac[offset + 1] & 0xFF) << 16) | ((hmac[offset + 2] & 0xFF) << 8) | (hmac[offset + 3] & 0xFF);
+  const otp = binary % Math.pow(10, digits);
+  return otp.toString().padStart(digits, '0');
+}
+
 export async function generateBatchTOTP(accounts: BatchInput[]): Promise<Record<string, string>> {
   const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
   if (isTauri) {
     try {
       return await invoke<Record<string, string>>('generate_totp_batch', { accounts });
     } catch {
-      // Fall through to mock generation if invoke fails
+      // Fall through to RFC 6238 generation if invoke fails
     }
   }
 
-  // Browser/Mock fallback: Generate a deterministic 6-digit mock TOTP code based on secret and current 30-second epoch
+  // RFC 6238-compliant browser fallback using Web Crypto API
   const result: Record<string, string> = {};
-  const epoch = Math.floor(Date.now() / 30000);
   for (const acc of accounts) {
-    let hash = 0;
-    const str = `${acc.secret}-${epoch}`;
-    for (let i = 0; i < str.length; i++) {
-      hash = (hash << 5) - hash + str.charCodeAt(i);
-      hash |= 0; // Convert to 32bit integer
+    try {
+      const code = await rfc6238TOTP(acc.secret, acc.digits || 6, acc.period || 30, acc.algorithm || 'SHA1');
+      result[acc.id] = code;
+    } catch {
+      result[acc.id] = '------';
     }
-    const absHash = Math.abs(hash);
-    const code = (absHash % 1000000).toString().padStart(6, '0');
-    result[acc.id] = code;
   }
   return result;
 }
