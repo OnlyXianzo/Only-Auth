@@ -235,6 +235,26 @@ extern "system" {
 
 #[tauri::command]
 pub fn set_window_screenshot_protection(window: tauri::Window, protect: bool) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri::Manager;
+        if let Ok(hwnd) = window.hwnd() {
+            unsafe {
+                let raw_hwnd = hwnd.0 as *mut std::ffi::c_void;
+                let affinity = if protect { 0x00000011 } else { 0x00000000 }; // 0x00000011 = WDA_EXCLUDEFROMCAPTURE
+                let res = SetWindowDisplayAffinity(raw_hwnd, affinity);
+                if res == 0 {
+                    // Fallback to WDA_MONITOR (0x1) if WDA_EXCLUDEFROMCAPTURE is unsupported
+                    SetWindowDisplayAffinity(raw_hwnd, 0x00000001);
+                }
+            }
+        }
+    }
+    let _ = window;
+    let _ = protect;
+    Ok(())
+}
+
 // ─── Sealed Import Gate: decrypts and strips credential hashes ────────────────
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -273,26 +293,6 @@ pub fn validate_import_payload(payload: String) -> Result<ImportValidationResult
         .unwrap_or_default();
 
     Ok(ImportValidationResult { accounts, warnings })
-}
-
-#[cfg(target_os = "windows")]
-    {
-        use tauri::Manager;
-        if let Ok(hwnd) = window.hwnd() {
-            unsafe {
-                let raw_hwnd = hwnd.0 as *mut std::ffi::c_void;
-                let affinity = if protect { 0x00000011 } else { 0x00000000 }; // 0x00000011 = WDA_EXCLUDEFROMCAPTURE
-                let res = SetWindowDisplayAffinity(raw_hwnd, affinity);
-                if res == 0 {
-                    // Fallback to WDA_MONITOR (0x1) if WDA_EXCLUDEFROMCAPTURE is unsupported
-                    SetWindowDisplayAffinity(raw_hwnd, 0x00000001);
-                }
-            }
-        }
-    }
-    let _ = window;
-    let _ = protect;
-    Ok(())
 }
 
 #[tauri::command]
