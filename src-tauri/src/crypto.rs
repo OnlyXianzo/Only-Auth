@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 use zeroize::Zeroize;
 use hmac::{Hmac, Mac};
-use sha1::Sha1;
-use sha2::{Sha256, Sha512, Digest};
-use std::time::{SystemTime, UNIX_EPOCH};
+use sha2::{Sha256, Digest};
 use subtle::ConstantTimeEq;
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -17,9 +15,7 @@ use argon2::{
     Argon2, Params
 };
 
-type HmacSha1 = Hmac<Sha1>;
 type HmacSha256 = Hmac<Sha256>;
-type HmacSha512 = Hmac<Sha512>;
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,83 +51,40 @@ pub fn generate_secret() -> String {
 
 #[tauri::command]
 pub async fn generate_totp_batch(accounts: Vec<AccountInput>) -> Result<HashMap<String, String>, String> {
+    use totp_rs::{Algorithm, TOTP, Secret};
+    
     let mut results = HashMap::new();
-    let current_time = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
-        .as_secs();
 
     for account in accounts {
         let cleaned = clean_secret(&account.secret);
-        match data_encoding::BASE32_NOPAD.decode(cleaned.as_bytes()) {
-            Ok(mut secret_bytes) => {
+        
+        match Secret::Encoded(cleaned).to_bytes() {
+            Ok(secret_bytes) => {
+                let digits = if account.digits == 0 { 6 } else { account.digits } as usize;
                 let period = if account.period == 0 { 30 } else { account.period };
-                let time_step = current_time / period;
                 
-                // Step B: Serialize the 64-bit integer T into an 8-byte big-endian array
-                let time_bytes = time_step.to_be_bytes();
-                
-                // Step C: Compute the HMAC hash based on configured algorithm
                 let algo = account.algorithm.as_deref().unwrap_or("SHA1").to_uppercase();
-                let hs = match algo.as_str() {
-                    "SHA256" => {
-                        let mut mac = match <HmacSha256 as KeyInit>::new_from_slice(&secret_bytes) {
-                            Ok(m) => m,
-                            Err(_) => {
-                                secret_bytes.zeroize();
-                                results.insert(account.id, "------".to_string());
-                                continue;
-                            }
-                        };
-                        mac.update(&time_bytes);
-                        mac.finalize().into_bytes().to_vec()
-                    }
-                    "SHA512" => {
-                        let mut mac = match <HmacSha512 as KeyInit>::new_from_slice(&secret_bytes) {
-                            Ok(m) => m,
-                            Err(_) => {
-                                secret_bytes.zeroize();
-                                results.insert(account.id, "------".to_string());
-                                continue;
-                            }
-                        };
-                        mac.update(&time_bytes);
-                        mac.finalize().into_bytes().to_vec()
-                    }
-                    _ => {
-                        let mut mac = match <HmacSha1 as KeyInit>::new_from_slice(&secret_bytes) {
-                            Ok(m) => m,
-                            Err(_) => {
-                                secret_bytes.zeroize();
-                                results.insert(account.id, "------".to_string());
-                                continue;
-                            }
-                        };
-                        mac.update(&time_bytes);
-                        mac.finalize().into_bytes().to_vec()
-                    }
+                let algorithm = match algo.as_str() {
+                    "SHA256" => Algorithm::SHA256,
+                    "SHA512" => Algorithm::SHA512,
+                    _ => Algorithm::SHA1,
                 };
                 
-                // Step D: Extract a dynamic 4-byte binary code (generic for any HMAC output length)
-                let offset = (hs[hs.len() - 1] & 0x0F) as usize;
-                
-                let binary_code = ((hs[offset] as u32 & 0x7F) << 24)
-                    | ((hs[offset + 1] as u32 & 0xFF) << 16)
-                    | ((hs[offset + 2] as u32 & 0xFF) << 8)
-                    | (hs[offset + 3] as u32 & 0xFF);
-                
-                // Step E: Compute the modulo of the binary code against 10^N
-                let digits = if account.digits == 0 { 6 } else { account.digits };
-                let modulus = 10_u32.pow(digits);
-                let totp = binary_code % modulus;
-                
-                // Step F: Format the resulting integer as a padded string
-                let code = format!("{:0width$}", totp, width = digits as usize);
-                
-                results.insert(account.id, code);
-                
-                // Immediate Stack Clearing
-                secret_bytes.zeroize();
+                match TOTP::new(algorithm, digits, 1, period, secret_bytes) {
+                    Ok(totp) => {
+                        match totp.generate_current() {
+                            Ok(code) => {
+                                results.insert(account.id, code);
+                            }
+                            Err(_) => {
+                                results.insert(account.id, "------".to_string());
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        results.insert(account.id, "------".to_string());
+                    }
+                }
             }
             Err(_) => {
                 results.insert(account.id, "------".to_string());
@@ -352,6 +305,8 @@ pub fn decrypt_metadata(encrypted: String, key_material: String) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha1::Sha1;
+    type HmacSha1 = Hmac<Sha1>;
 
     #[test]
     fn test_validate_base32_valid() {
@@ -367,11 +322,12 @@ mod tests {
     fn test_totp_generation_rfc6238() {
         // RFC 6238 Test Vector for SHA1
         // Secret: "12345678901234567890" => Base32: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
-        let accounts = vec![AccountInput {
+        let _accounts = vec![AccountInput {
             id: "test1".to_string(),
             secret: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ".to_string(),
             digits: 8,
             period: 30,
+            algorithm: Some("SHA1".to_string()),
         }];
         
         // Removed unused results HashMap
@@ -387,7 +343,7 @@ mod tests {
         let time_step = time / 30;
         let time_bytes = time_step.to_be_bytes();
         
-        let mut mac = HmacSha1::new_from_slice(&secret_bytes).unwrap();
+        let mut mac = <HmacSha1 as KeyInit>::new_from_slice(&secret_bytes).unwrap();
         mac.update(&time_bytes);
         let hs = mac.finalize().into_bytes();
         

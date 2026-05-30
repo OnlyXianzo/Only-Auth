@@ -97,6 +97,30 @@ function getServiceColors(logoType: string) {
   return SERVICE_COLORS[logoType] || SERVICE_COLORS['custom'];
 }
 
+const isRotationDue = (dateStr?: string) => {
+  if (!dateStr) return false;
+  const targetDate = new Date(dateStr);
+  if (isNaN(targetDate.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  targetDate.setHours(0, 0, 0, 0);
+  return today >= targetDate;
+};
+
+function getServiceHex(logoType: string): string {
+  const hexes: Record<string, string> = {
+    github: '#71717a',
+    google: '#3b82f6',
+    discord: '#a855f7',
+    aws: '#f97316',
+    slack: '#10b981',
+    proton: '#6366f1',
+    stripe: '#6366f1',
+    custom: '#14b8a6',
+  };
+  return hexes[logoType] || hexes['custom'];
+}
+
 // ─── Brand Logo Component with SVG/PNG Try-and-Fallback ───────────────────────
 interface BrandLogoProps {
   name: string;
@@ -178,6 +202,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   duressAction: 'fake',
   autoLockTimeout: 300,
   instantLockOnBlur: false,
+  screenshotProtection: true,
 };
 
 // Helper for Bitwarden URI parsing
@@ -216,17 +241,23 @@ export default function App() {
       const saved = await loadVaultData();
       setAccounts(saved);
       setIsAccountsLoaded(true);
-      // Enable native desktop screenshot/capture prevention
-      await setWindowScreenshotProtection(true);
     };
     bootData();
   }, []);
 
+  useEffect(() => {
+    const applyScreenshotProtection = async () => {
+      const protect = settings.screenshotProtection !== false;
+      await setWindowScreenshotProtection(protect);
+    };
+    applyScreenshotProtection();
+  }, [settings.screenshotProtection]);
+
   useEffect(() => { 
     if (isAccountsLoaded) {
-      saveVaultData(accounts);
+      saveVaultData(accounts, decryptedLogKeyHex);
     }
-  }, [accounts, isAccountsLoaded]);
+  }, [accounts, isAccountsLoaded, decryptedLogKeyHex]);
   useEffect(() => { localStorage.setItem('onlyauth_settings_v3', JSON.stringify(settings)); }, [settings]);
 
   // ── Auth state
@@ -501,6 +532,7 @@ export default function App() {
   const [formDigits, setFormDigits] = useState<number>(6);
   const [formPeriod, setFormPeriod] = useState<number>(30);
   const [formAlgorithm, setFormAlgorithm] = useState<'SHA1' | 'SHA256' | 'SHA512'>('SHA1');
+  const [formNextRotationDate, setFormNextRotationDate] = useState('');
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraStatus, setCameraStatus] = useState('');
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -770,7 +802,22 @@ export default function App() {
         setDecryptedLogKeyHex(derivedKeyHex);
         await writeAuditLog(`Vault unlocked successfully (${matchedType})`, derivedKeyHex);
 
+        // Decrypt notes of all accounts using derivedKeyHex
+        const decryptedAccounts = await Promise.all(accounts.map(async acc => {
+          if (acc.notes && acc.notes.includes(':')) {
+            try {
+              const decrypted = await decryptMetadata(acc.notes, derivedKeyHex);
+              return { ...acc, notes: decrypted };
+            } catch (e) {
+              console.error("Failed to decrypt notes for account", acc.id, e);
+              return acc;
+            }
+          }
+          return acc;
+        }));
+
         safeTransition(() => {
+          setAccounts(decryptedAccounts);
           setIsLocked(false);
           setUnlockError('');
           setUnlockInput('');
@@ -955,13 +1002,14 @@ export default function App() {
     setFormNotes(''); setFormCategory(activeTag === 'all' ? 'personal' : activeTag);
     setFormIsPinned(false); setFormLogoType('custom'); setFormTagsString('');
     setFormDigits(6); setFormPeriod(30); setFormAlgorithm('SHA1');
+    setFormNextRotationDate('');
     setShowIconPicker(false);
     setIsAddModalOpen(true);
   });
 
   const openEditModal = (account: Account) => safeTransition(() => {
     setEditingAccount(account);
-    setFormName(account.name); setFormEmail(account.email); setFormSecret('••••••••'); setShowSecret(false);
+    setFormName(account.name); setFormEmail(account.email); setFormSecret(account.secret); setShowSecret(false);
     formSecretRef.current = account.secret;
     setFormNotes(account.notes); setFormCategory(account.category);
     setFormIsPinned(account.isPinned); setFormLogoType(account.logoType);
@@ -969,6 +1017,7 @@ export default function App() {
     setFormDigits(account.digits || 6);
     setFormPeriod(account.period || 30);
     setFormAlgorithm(account.algorithm || 'SHA1');
+    setFormNextRotationDate(account.nextRotationDate || '');
     setShowIconPicker(false);
     setIsAddModalOpen(true);
   });
@@ -979,17 +1028,7 @@ export default function App() {
   };
 
   const handleToggleFormSecretVisibility = () => {
-    if (showSecret) {
-      if (editingAccount) {
-        setFormSecret('••••••••');
-      }
-      setShowSecret(false);
-    } else {
-      if (editingAccount) {
-        setFormSecret(editingAccount.secret || formSecretRef.current);
-      }
-      setShowSecret(true);
-    }
+    setShowSecret(prev => !prev);
   };
 
   const triggerVerifyAction = (type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition', data?: any) => safeTransition(() => {
@@ -1011,20 +1050,29 @@ export default function App() {
         } else if (pendingAction?.type === 'delete') {
           deleteAccountConfirmed(pendingAction.data);
         } else if (pendingAction?.type === 'update-passphrase') {
-          sha256(pendingAction.data.newPassphrase).then(newHash => {
+          sha256(pendingAction.data.newPassphrase + "OnlyAuthAuditLogSalt2026").then(async newKeyHex => {
+            await saveVaultData(accounts, newKeyHex);
+            setDecryptedLogKeyHex(newKeyHex);
+            const newHash = await sha256(pendingAction.data.newPassphrase);
             setSettings(prev => ({ ...prev, passphraseHash: newHash }));
             setNewPassphraseWords([]);
             showToast('Passphrase updated. Use your new passphrase to unlock.', 'success');
           });
         } else if (pendingAction?.type === 'update-pin') {
-          sha256(pendingAction.data.newPin).then(newHash => {
+          sha256(pendingAction.data.newPin + "OnlyAuthAuditLogSalt2026").then(async newKeyHex => {
+            await saveVaultData(accounts, newKeyHex);
+            setDecryptedLogKeyHex(newKeyHex);
+            const newHash = await sha256(pendingAction.data.newPin);
             setSettings(prev => ({ ...prev, pinHash: newHash, pinAttempts: 0 }));
             setNewPinField('');
             setNewPinConfirm('');
             showToast('PIN updated successfully.', 'success');
           });
         } else if (pendingAction?.type === 'update-masterkey') {
-          sha256(pendingAction.data.newKey).then(newHash => {
+          sha256(pendingAction.data.newKey + "OnlyAuthAuditLogSalt2026").then(async newKeyHex => {
+            await saveVaultData(accounts, newKeyHex);
+            setDecryptedLogKeyHex(newKeyHex);
+            const newHash = await sha256(pendingAction.data.newKey);
             setSettings(prev => ({ ...prev, masterKeyHash: newHash }));
             setNewMasterKeyField('');
             showToast('Master Key updated successfully.', 'success');
@@ -1060,22 +1108,20 @@ export default function App() {
 
   const saveAccountConfirmed = () => {
     const parsedTags = formTagsString.split(',').map(t => t.trim()).filter(Boolean);
-    let resolvedSecret = formSecret || formSecretRef.current;
-    if (resolvedSecret === '••••••••' && editingAccount) {
-      resolvedSecret = editingAccount.secret;
-    }
+    const resolvedSecret = formSecret || formSecretRef.current;
     const sanitizedSecret = resolvedSecret.trim().toUpperCase();
     if (editingAccount) {
       const updated = accounts.map(acc => acc.id === editingAccount.id
         ? { 
             ...acc, name: formName, email: formEmail, secret: sanitizedSecret, notes: formNotes, 
             category: formCategory, isPinned: formIsPinned, logoType: formLogoType, tags: parsedTags,
-            digits: formDigits, period: formPeriod, algorithm: formAlgorithm
+            digits: formDigits, period: formPeriod, algorithm: formAlgorithm,
+            nextRotationDate: formNextRotationDate || undefined
           }
         : acc
       );
       setAccounts(updated);
-      saveVaultData(updated);
+      saveVaultData(updated, decryptedLogKeyHex);
     } else {
       const newAcc: Account = {
         id: `acc-${Date.now()}`, name: formName, email: formEmail, secret: sanitizedSecret,
@@ -1084,12 +1130,13 @@ export default function App() {
         createdAt: new Date().toISOString(),
         digits: formDigits,
         period: formPeriod,
-        algorithm: formAlgorithm
+        algorithm: formAlgorithm,
+        nextRotationDate: formNextRotationDate || undefined
       };
       const updated = [newAcc, ...accounts];
       setAccounts(updated);
       setFocusedAccountId(newAcc.id);
-      saveVaultData(updated);
+      saveVaultData(updated, decryptedLogKeyHex);
     }
     setIsAddModalOpen(false);
     setEditingAccount(null);
@@ -1849,7 +1896,7 @@ export default function App() {
         <div className="p-3 border-t border-white/5 shrink-0">
           <div className="glass-panel p-3 rounded-2xl flex flex-col gap-2.5">
             {!sidebarCollapsed && (
-              <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-2.5 mobile-avatar-left">
                 <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#2d5bff] to-[#8B5CF6] flex items-center justify-center text-white font-semibold text-xs shrink-0">
                   {(settings.devAccountName || 'Dev Account').trim().split(/\s+/).map(n => n[0] || '').join('').substring(0, 2).toUpperCase() || 'DA'}
                 </div>
@@ -1999,8 +2046,21 @@ export default function App() {
                             <BrandLogo name={focusedAccount.name} logoType={focusedAccount.logoType} className={`${c ? 'w-10 h-10 text-sm' : 'w-14 h-14 text-lg'}`} />
                           </div>
                           <div className="min-w-0">
-                            <h2 className={`font-display font-semibold text-white truncate leading-tight ${c ? 'text-base' : 'text-xl md:text-2xl'}`}>{focusedAccount.name}</h2>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h2 className={`font-display font-semibold text-white truncate leading-tight ${c ? 'text-base' : 'text-xl md:text-2xl'}`}>{focusedAccount.name}</h2>
+                              {focusedAccount.nextRotationDate && isRotationDue(focusedAccount.nextRotationDate) && (
+                                <span className="flex items-center gap-1 bg-amber-500/10 text-amber-500 border border-amber-500/20 text-[9px] font-bold px-2 py-0.5 rounded-full shrink-0 tracking-wider">
+                                  ROTATION OVERDUE
+                                </span>
+                              )}
+                            </div>
                             <p className="text-xs text-[#c4c5d9] truncate mt-0.5">{focusedAccount.email}</p>
+                            {focusedAccount.nextRotationDate && (
+                              <p className="text-[10px] text-[#8e90a2] mt-1">
+                                Rotation scheduled: <span className="text-white font-medium">{focusedAccount.nextRotationDate}</span>
+                                {isRotationDue(focusedAccount.nextRotationDate) && <span className="text-amber-500 ml-1.5 font-semibold">⚠️ Action required</span>}
+                              </p>
+                            )}
                           </div>
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0">
@@ -2048,23 +2108,29 @@ export default function App() {
                       </div>
 
                       {/* Footer */}
-                      <div className={`flex flex-col gap-3 border-t border-white/5 ${c ? 'pt-3' : 'pt-4'} relative z-10`}>
-                        {!c && focusedAccount.notes && (
-                          <p className="text-xs text-[#c4c5d9] leading-relaxed italic">{focusedAccount.notes}</p>
-                        )}
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-[#8e90a2]">Refreshes in <span className="font-mono text-white font-semibold">{secondsRemaining}s</span></span>
-                          {focusedAccount.secret && focusedAccount.secret.trim() !== "" && (
-                            <button onClick={() => handleCopyCode(focusedAccount.id, focusedCode)}
-                              className="flex items-center gap-1 text-[#00dce5] hover:text-white transition-colors">
-                              <Copy className="w-3.5 h-3.5" /> <span>Copy Code</span>
-                            </button>
-                          )}
-                        </div>
-                        <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
-                          <div className="h-full progress-bar-inner bg-[#00dce5]" style={{ width: `${(secondsRemaining / (settings.autoRenewInterval || 60)) * 100}%` }} />
-                        </div>
-                      </div>
+                      {(() => {
+                        const accountPeriod = focusedAccount.period || 30;
+                        const accountSecondsRemaining = accountPeriod - (Math.floor(Date.now() / 1000) % accountPeriod);
+                        return (
+                          <div className={`flex flex-col gap-3 border-t border-white/5 ${c ? 'pt-3' : 'pt-4'} relative z-10`}>
+                            {!c && focusedAccount.notes && (
+                              <p className="text-xs text-[#c4c5d9] leading-relaxed italic">{focusedAccount.notes}</p>
+                            )}
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-[#8e90a2]">Refreshes in <span className="font-mono text-white font-semibold">{accountSecondsRemaining}s</span></span>
+                              {focusedAccount.secret && focusedAccount.secret.trim() !== "" && (
+                                <button onClick={() => handleCopyCode(focusedAccount.id, focusedCode)}
+                                  className="flex items-center gap-1 text-[#00dce5] hover:text-white transition-colors">
+                                  <Copy className="w-3.5 h-3.5" /> <span>Copy Code</span>
+                                </button>
+                              )}
+                            </div>
+                            <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+                              <div className="h-full progress-bar-inner bg-[#00dce5]" style={{ width: `${(accountSecondsRemaining / accountPeriod) * 100}%` }} />
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   ) : (
                     <div className="glass-panel rounded-3xl p-10 text-center flex flex-col items-center gap-4 text-[#8e90a2]">
@@ -2082,9 +2148,13 @@ export default function App() {
                         {visibleAccounts.filter(a => a.isPinned).map(acc => {
                           const pCode = totpCodes[acc.id] || '------';
                           const isSelected = focusedAccountId === acc.id;
+                          const cardColor = acc.color || getServiceHex(acc.logoType);
                           return (
                             <div key={acc.id} onClick={() => setFocusedAccountId(acc.id)}
-                              className={`glass-panel ${c ? 'min-w-[200px] p-3' : 'min-w-[240px] p-4'} rounded-2xl flex flex-col gap-3 cursor-pointer hover:bg-white/5 transition-all shrink-0 ${isSelected ? (isHiddenVaultActive ? 'border border-amber-500/50' : 'border border-[#00dce5]/40') : ''}`}>
+                              className={`glass-panel ${c ? 'min-w-[200px] p-3' : 'min-w-[240px] p-4'} rounded-2xl flex flex-col gap-3 cursor-pointer hover:bg-white/5 transition-all shrink-0 border-l-4 ${
+                                isSelected ? (isHiddenVaultActive ? 'bg-amber-500/5 ring-1 ring-amber-500/20' : 'bg-white/5 ring-1 ring-white/10') : ''
+                              }`}
+                              style={{ borderLeftColor: cardColor }}>
                               <div className="flex items-center gap-2">
                                 <div className="shrink-0">
                                   <BrandLogo name={acc.name} logoType={acc.logoType} className={`${c ? 'w-8 h-8 text-xs' : 'w-10 h-10 text-xs'}`} />
@@ -2127,22 +2197,29 @@ export default function App() {
                     {filteredAccounts.length > 0 ? filteredAccounts.map(acc => {
                       const isFocused = focusedAccountId === acc.id;
                       const aCode = totpCodes[acc.id] || '------';
+                      const cardColor = acc.color || getServiceHex(acc.logoType);
                       return (
                         <motion.div key={acc.id} onClick={() => setFocusedAccountId(acc.id)}
                           whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} transition={{ duration: 0.1, ease: "easeOut" }}
-                          className={`glass-panel ${c ? 'rounded-xl p-2.5' : 'rounded-2xl p-4'} flex items-center justify-between cursor-pointer transition-all duration-150 ease-out group border-l-[3px] ${
+                          className={`glass-panel ${c ? 'rounded-xl p-2.5' : 'rounded-2xl p-4'} flex items-center justify-between cursor-pointer transition-all duration-150 ease-out group border-l-4 ${
                             isFocused
-                              ? `${isHiddenVaultActive ? 'border-l-amber-500 bg-amber-500/5' : 'border-l-[#00dce5] bg-white/5'} border-t-transparent border-r-transparent border-b-transparent`
-                              : `border-l-transparent border-t-white/8 border-r-white/8 border-b-white/8 ${isHiddenVaultActive ? 'hover:border-l-amber-500/60' : 'hover:border-l-[#00dce5]/60'} hover:border-t-transparent hover:border-r-transparent hover:border-b-transparent hover:bg-white/5`
-                          }`}>
+                              ? `${isHiddenVaultActive ? 'bg-amber-500/5 ring-1 ring-amber-500/20' : 'bg-white/5 ring-1 ring-white/10'}`
+                              : `hover:bg-white/5`
+                          }`}
+                          style={{ borderLeftColor: cardColor }}>
                           <div className="flex items-center gap-3 min-w-0 flex-1">
                             <div className="shrink-0">
                               <BrandLogo name={acc.name} logoType={acc.logoType} className={`${c ? 'w-8 h-8 text-xs' : 'w-11 h-11 text-xs'}`} />
                             </div>
                             <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-1">
+                              <div className="flex items-center gap-1 flex-wrap">
                                 <h4 className={`font-semibold text-white truncate ${c ? 'text-[10px]' : 'text-xs'}`}>{acc.name}</h4>
                                 {acc.isPinned && <Pin className="w-2.5 h-2.5 text-[#00dce5]/60 shrink-0 fill-current" />}
+                                {acc.nextRotationDate && isRotationDue(acc.nextRotationDate) && (
+                                  <span className="flex items-center gap-0.5 bg-amber-500/10 text-amber-500 border border-amber-500/20 text-[8px] font-bold px-1.5 py-0.5 rounded-full shrink-0 tracking-wider">
+                                    ROTATE
+                                  </span>
+                                )}
                               </div>
                               {!c && <p className="text-[10px] text-[#8e90a2] truncate mt-0.5">{acc.email}</p>}
                             </div>
@@ -2961,6 +3038,18 @@ export default function App() {
                         </div>
                       </div>
                     )}
+
+                    {/* Screenshot Protection Toggle */}
+                    <div className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/8">
+                      <div>
+                        <p className="text-sm font-semibold text-white">Prevent Screenshots</p>
+                        <p className="text-xs text-[#8e90a2] mt-0.5">Protect vault by disabling native screenshots & video capture</p>
+                      </div>
+                      <button onClick={() => setSettings(prev => ({ ...prev, screenshotProtection: !prev.screenshotProtection }))}
+                        className={`relative w-10 h-6 rounded-full transition-colors ${settings.screenshotProtection !== false ? 'bg-[#00dce5]' : 'bg-white/10'}`}>
+                        <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${settings.screenshotProtection !== false ? 'left-5' : 'left-1'}`} />
+                      </button>
+                    </div>
                   </div>
                 )}
               </motion.div>
@@ -3261,6 +3350,12 @@ export default function App() {
                       <option value={8}>8 Digits</option>
                     </select>
                   </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">Key Rotation Reminder Date</label>
+                  <input type="date" value={formNextRotationDate} onChange={e => setFormNextRotationDate(e.target.value)}
+                    className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
                 </div>
 
                 <textarea rows={2} value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="Notes (optional)"

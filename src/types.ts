@@ -13,6 +13,7 @@ export interface Account {
   digits?: number;    // TOTP digit count (default 6)
   period?: number;    // TOTP period in seconds (default 30)
   algorithm?: 'SHA1' | 'SHA256' | 'SHA512';  // HMAC algorithm
+  nextRotationDate?: string;  // YYYY-MM-DD rotation reminder
 }
 
 export interface HiddenVaultSettings {
@@ -46,6 +47,7 @@ export interface AppSettings {
   duressAction?: 'wipe' | 'fake';
   autoLockTimeout?: number;
   instantLockOnBlur?: boolean;
+  screenshotProtection?: boolean;
 }
 
 

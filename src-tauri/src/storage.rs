@@ -26,6 +26,7 @@ pub struct VaultAccount {
     pub digits: Option<u32>,
     pub period: Option<u64>,
     pub algorithm: Option<String>,
+    pub next_rotation_date: Option<String>,
 }
 
 fn get_storage_path(app: &AppHandle) -> Result<PathBuf, String> {

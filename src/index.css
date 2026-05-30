@@ -183,3 +183,13 @@ body {
   font-weight: 600;
   min-width: 1.25rem;
 }
+
+/* Prevent mobile centering of user avatar menu on viewports < 480px */
+@media (max-width: 480px) {
+  .mobile-avatar-left {
+    display: flex !important;
+    justify-content: flex-start !important;
+    align-items: center !important;
+    text-align: left !important;
+  }
+}

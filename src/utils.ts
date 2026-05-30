@@ -89,10 +89,25 @@ export async function loadVaultData(): Promise<Account[]> {
   return [];
 }
 
-export async function saveVaultData(accounts: Account[]): Promise<boolean> {
+export async function saveVaultData(accounts: Account[], keyHex?: string): Promise<boolean> {
+  // If keyHex is provided, GCM-encrypt the notes of accounts before serializing
+  const accountsToSave = keyHex 
+    ? await Promise.all(accounts.map(async acc => {
+        if (acc.notes && acc.notes.trim() !== '') {
+          try {
+            const encryptedNotes = await encryptMetadata(acc.notes, keyHex);
+            return { ...acc, notes: encryptedNotes };
+          } catch {
+            return acc;
+          }
+        }
+        return acc;
+      }))
+    : accounts;
+
   // Always sync with localStorage for additional safety and web mode support
   try {
-    localStorage.setItem('onlyauth_accounts_v3', JSON.stringify(accounts));
+    localStorage.setItem('onlyauth_accounts_v3', JSON.stringify(accountsToSave));
   } catch (e) {
     console.error('Failed to save mock accounts to localStorage:', e);
   }
@@ -100,7 +115,7 @@ export async function saveVaultData(accounts: Account[]): Promise<boolean> {
   const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
   if (isTauri) {
     try {
-      await invoke('save_vault_data', { accounts });
+      await invoke('save_vault_data', { accounts: accountsToSave });
       return true;
     } catch (e) {
       console.error('Failed to save vault data to Rust backend:', e);
