@@ -454,7 +454,7 @@ export default function App() {
     const setupTauriListeners = async () => {
       try {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
-        const win = getCurrentWindow();
+        const win = getCurrentWindow() as any;
         unlistenBlur = await win.onBlur(handleBlur);
         unlistenFocus = await win.onFocus(handleFocus);
       } catch {}
@@ -569,14 +569,26 @@ export default function App() {
   }, [isTransitioning]);
 
   // ── MEMORY SCRUBBING & RAM CLEARDOWN ──
-  // Scrub views/modals secrets whenever active views, lock states, or modals toggle
+  // Scrub views/modals secrets on lock, close, or tag/setup transitions
   useEffect(() => {
-    return () => {
+    if (!isAddModalOpen) {
+      setFormSecret("");
+    }
+  }, [isAddModalOpen]);
+
+  useEffect(() => {
+    if (isLocked) {
       setUnlockInput("");
       setVerificationInput("");
       setFormSecret("");
-    };
-  }, [activeTag, isLocked, isAddModalOpen, setupStep]);
+    }
+  }, [isLocked]);
+
+  useEffect(() => {
+    setUnlockInput("");
+    setVerificationInput("");
+    setFormSecret("");
+  }, [activeTag, setupStep]);
 
   // Scrub settings input buffers when settings sub-tab changes
   useEffect(() => {
