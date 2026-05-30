@@ -363,6 +363,34 @@ export async function readAuditLogs(keyHex: string): Promise<string[]> {
   }
 }
 
+export async function validateImportPayload(payload: string): Promise<{ accounts: any[]; warnings: string[] }> {
+  const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
+  if (isTauri) {
+    try {
+      return await invoke<{ accounts: any[]; warnings: string[] }>('validate_import_payload', { payload });
+    } catch (e) {
+      console.warn('Tauri validate_import_payload failed:', e);
+    }
+  }
+  // Browser fallback: strip credential hashes locally
+  try {
+    const parsed = JSON.parse(payload);
+    const warnings: string[] = [];
+    const sensitiveKeys = ['passphraseHash', 'masterKeyHash', 'pinHash', 'authHashes', 'authMetadata', 'duressPinHash', 'duressPassphraseHash'];
+    if (parsed?.settings) {
+      for (const key of sensitiveKeys) {
+        if (key in parsed.settings) {
+          delete parsed.settings[key];
+          warnings.push(`Stripped sensitive setting: ${key}`);
+        }
+      }
+    }
+    return { accounts: parsed?.accounts || [], warnings };
+  } catch {
+    return { accounts: [], warnings: ['Invalid JSON payload'] };
+  }
+}
+
 export async function setWindowScreenshotProtection(protect: boolean): Promise<void> {
   const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
   if (isTauri) {

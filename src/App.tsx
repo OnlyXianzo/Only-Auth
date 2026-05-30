@@ -19,6 +19,12 @@ import {
   encryptBackup, decryptBackup, writeAuditLog, readAuditLogs,
   setWindowScreenshotProtection, encryptMetadata, decryptMetadata, BatchInput
 } from './utils';
+import {
+  exportPurifiedJSON, exportPlainTextURI, exportHTML,
+  buildSealedPayload, parseSealedPayload,
+  parseOnlyAuthJSON, parseEnteAuthJSON, parseBitwardenJSON,
+  parseGoogleAuthJSON, parseOTPAuthBatch,
+} from './utils/exportEngine';
 
 // ─── BIP-39 Mini Wordlist (256 common words for demo — real apps use full 2048) ───
 const BIP39_WORDS = [
@@ -228,14 +234,6 @@ const DEFAULT_SETTINGS: AppSettings = {
 };
 
 // Helper for Bitwarden URI parsing
-function extractSecretFromURI(uri: string): string | null {
-  if (!uri) return null;
-  const match = uri.match(/[?&]secret=([A-Z2-7]+)/i);
-  if (match && match[1]) return match[1].toUpperCase();
-  if (/^[A-Z2-7]{8,}$/i.test(uri.trim())) return uri.trim().toUpperCase();
-  return null;
-}
-
 // ─── Toast Notification System ──────────────────────────────────────────────
 type ToastType = 'success' | 'error' | 'info';
 interface Toast { id: string; message: string; type: ToastType; }
@@ -1278,116 +1276,96 @@ export default function App() {
   };
 
   // ── Backup / Import & Export
-  const handleDownloadBackup = () => {
-    const blob = new Blob([JSON.stringify({ accounts, settings }, null, 2)], { type: 'application/json' });
+  const handleExport = (format: 'purified-json' | 'plain-text' | 'html') => {
+    const extMap = { 'purified-json': '.json', 'plain-text': '.txt', 'html': '.html' };
+    const contentMap = {
+      'purified-json': () => exportPurifiedJSON(accounts, settings),
+      'plain-text': () => exportPlainTextURI(accounts),
+      'html': () => exportHTML(accounts),
+    };
+    const content = contentMap[format]();
+    const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `OnlyAuth_Backup_${new Date().toISOString().slice(0, 10)}.json`;
+    a.href = url;
+    a.download = `OnlyAuth_Export_${format}_${new Date().toISOString().slice(0, 10)}${extMap[format]}`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setSettings(prev => ({ ...prev, lastBackupDate: new Date().toISOString() }));
+    showToast(`${format === 'purified-json' ? 'Purified JSON' : format === 'plain-text' ? 'Plain Text URIs' : 'HTML'} export downloaded.`, 'success');
   };
 
-  const handleUploadBackup = (e: ChangeEvent<HTMLInputElement>) => {
+  const handleImportOnlyAuth = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return;
     const reader = new FileReader();
     reader.onload = ev => {
       try {
-        const parsed = JSON.parse(ev.target?.result as string);
+        const result = parseOnlyAuthJSON(ev.target?.result as string);
+        if (result.accounts.length === 0) {
+          showToast(result.warnings[0] || 'No accounts found.', 'error');
+          return;
+        }
         safeTransition(() => {
-          if (parsed?.accounts) setAccounts(parsed.accounts);
-          if (parsed?.settings) setSettings(prev => ({ ...DEFAULT_SETTINGS, ...prev, ...parsed.settings }));
-          showToast('Vault backup restored successfully.', 'success');
+          setAccounts(prev => [...result.accounts, ...prev]);
+          showToast(`Imported ${result.accounts.length} account${result.accounts.length !== 1 ? 's' : ''} from Only Auth JSON.`, 'success');
         });
       } catch { showToast('Invalid backup file. Check the format and try again.', 'error'); }
     };
     reader.readAsText(file);
   };
 
-  // Ente Auth Parser
   const handleImportEnteJSON = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return;
     const reader = new FileReader();
     reader.onload = ev => {
       try {
-        const data = JSON.parse(ev.target?.result as string);
-        const accountsList = Array.isArray(data) ? data : (data.accounts || []);
-        if (!Array.isArray(accountsList)) throw new Error("Invalid format");
-        
-        const imported: Account[] = [];
-        accountsList.forEach((item: any) => {
-          const secret = item.secret || item.key;
-          const name = item.issuer || item.name || 'Ente Imported';
-          const email = item.label || item.username || item.email || '';
-          if (secret) {
-            imported.push({
-              id: `acc-ente-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-              name,
-              email,
-              secret: secret.trim().toUpperCase(),
-              notes: item.notes || `Imported from Ente Auth JSON`,
-              category: 'personal',
-              isPinned: false,
-              logoType: 'custom',
-              createdAt: new Date().toISOString()
-            });
-          }
-        });
-        
-        if (imported.length === 0) {
-          showToast('No valid TOTP secrets found in Ente JSON.', 'error');
+        const result = parseEnteAuthJSON(ev.target?.result as string);
+        if (result.accounts.length === 0) {
+          showToast(result.warnings[0] || 'No valid TOTP secrets found.', 'error');
           return;
         }
-        
         safeTransition(() => {
-          setAccounts(prev => [...imported, ...prev]);
-          showToast(`Imported ${imported.length} account${imported.length !== 1 ? 's' : ''} from Ente Auth.`, 'success');
+          setAccounts(prev => [...result.accounts, ...prev]);
+          showToast(`Imported ${result.accounts.length} account${result.accounts.length !== 1 ? 's' : ''} from Ente Auth.`, 'success');
         });
       } catch { showToast('Failed to parse Ente JSON. Ensure it is fully decrypted.', 'error'); }
     };
     reader.readAsText(file);
   };
 
-  // Bitwarden Parser
   const handleImportBitwardenJSON = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return;
     const reader = new FileReader();
     reader.onload = ev => {
       try {
-        const data = JSON.parse(ev.target?.result as string);
-        const items = data.items || [];
-        if (!Array.isArray(items)) throw new Error("Invalid format");
-        
-        const imported: Account[] = [];
-        items.forEach((item: any) => {
-          const login = item.login;
-          if (login && login.totp) {
-            const secret = extractSecretFromURI(login.totp);
-            if (secret) {
-              imported.push({
-                id: `acc-bw-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-                name: item.name || 'Bitwarden Imported',
-                email: login.username || '',
-                secret,
-                notes: item.notes || `Imported from Bitwarden login item`,
-                category: 'personal',
-                isPinned: false,
-                logoType: 'custom',
-                createdAt: new Date().toISOString()
-              });
-            }
-          }
-        });
-        
-        if (imported.length === 0) {
-          showToast('No login items with valid TOTP secrets found.', 'error');
+        const result = parseBitwardenJSON(ev.target?.result as string);
+        if (result.accounts.length === 0) {
+          showToast(result.warnings[0] || 'No valid TOTP secrets found.', 'error');
           return;
         }
-        
         safeTransition(() => {
-          setAccounts(prev => [...imported, ...prev]);
-          showToast(`Imported ${imported.length} account${imported.length !== 1 ? 's' : ''} from Bitwarden.`, 'success');
+          setAccounts(prev => [...result.accounts, ...prev]);
+          showToast(`Imported ${result.accounts.length} account${result.accounts.length !== 1 ? 's' : ''} from Bitwarden.`, 'success');
         });
       } catch { showToast('Failed to parse Bitwarden JSON. Ensure it is a valid decrypted export.', 'error'); }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleImportGoogleAuthJSON = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const result = parseGoogleAuthJSON(ev.target?.result as string);
+        if (result.accounts.length === 0) {
+          showToast(result.warnings[0] || 'No valid TOTP parameters found.', 'error');
+          return;
+        }
+        safeTransition(() => {
+          setAccounts(prev => [...result.accounts, ...prev]);
+          showToast(`Imported ${result.accounts.length} account${result.accounts.length !== 1 ? 's' : ''} from Google Auth.`, 'success');
+        });
+      } catch { showToast('Failed to parse Google Auth JSON.', 'error'); }
     };
     reader.readAsText(file);
   };
@@ -2895,7 +2873,7 @@ export default function App() {
                         <div className="space-y-2">
                           {/* Only Auth Import */}
                           <div className="relative">
-                            <input type="file" accept=".json" onChange={handleUploadBackup} className="hidden" id="onlyauth-import-input" />
+                            <input type="file" accept=".json" onChange={handleImportOnlyAuth} className="hidden" id="onlyauth-import-input" />
                             <label htmlFor="onlyauth-import-input"
                               className="w-full h-10 px-4 rounded-xl border border-white/10 hover:bg-white/5 transition-all text-xs font-semibold flex items-center justify-between text-white cursor-pointer">
                               <span>Only Auth JSON Backup</span>
@@ -2919,6 +2897,43 @@ export default function App() {
                             <label htmlFor="bw-import-input"
                               className="w-full h-10 px-4 rounded-xl border border-white/10 hover:bg-white/5 transition-all text-xs font-semibold flex items-center justify-between text-white cursor-pointer">
                               <span>Bitwarden Decrypted JSON</span>
+                              <ChevronRight className="w-3.5 h-3.5 text-[#8e90a2]" />
+                            </label>
+                          </div>
+
+                          {/* Google Auth Import */}
+                          <div className="relative">
+                            <input type="file" accept=".json" onChange={handleImportGoogleAuthJSON} className="hidden" id="google-import-input" />
+                            <label htmlFor="google-import-input"
+                              className="w-full h-10 px-4 rounded-xl border border-white/10 hover:bg-white/5 transition-all text-xs font-semibold flex items-center justify-between text-white cursor-pointer">
+                              <span>Google Auth Decrypted JSON</span>
+                              <ChevronRight className="w-3.5 h-3.5 text-[#8e90a2]" />
+                            </label>
+                          </div>
+
+                          {/* otpauth:// URI Import */}
+                          <div className="relative">
+                            <input type="file" accept=".txt,.uri" onChange={async (e) => {
+                              const file = e.target.files?.[0]; if (!file) return;
+                              const reader = new FileReader();
+                              reader.onload = ev => {
+                                try {
+                                  const result = parseOTPAuthBatch(ev.target?.result as string);
+                                  if (result.accounts.length === 0) {
+                                    showToast(result.warnings[0] || 'No valid URIs found.', 'error');
+                                    return;
+                                  }
+                                  safeTransition(() => {
+                                    setAccounts(prev => [...result.accounts, ...prev]);
+                                    showToast(`Imported ${result.accounts.length} account${result.accounts.length !== 1 ? 's' : ''} from otpauth URIs.`, 'success');
+                                  });
+                                } catch { showToast('Failed to parse URI file.', 'error'); }
+                              };
+                              reader.readAsText(file);
+                            }} className="hidden" id="uri-import-input" />
+                            <label htmlFor="uri-import-input"
+                              className="w-full h-10 px-4 rounded-xl border border-white/10 hover:bg-white/5 transition-all text-xs font-semibold flex items-center justify-between text-white cursor-pointer">
+                              <span>otpauth:// URI List (.txt)</span>
                               <ChevronRight className="w-3.5 h-3.5 text-[#8e90a2]" />
                             </label>
                           </div>
@@ -2946,11 +2961,10 @@ export default function App() {
                                 try {
                                   const payload = ev.target?.result as string;
                                   const decrypted = await decryptBackup(payload.trim(), backupPassword);
-                                  const parsed = JSON.parse(decrypted);
+                                  const { accounts: parsedAccounts } = parseSealedPayload(decrypted);
                                   safeTransition(() => {
-                                    if (parsed?.accounts) setAccounts(parsed.accounts);
-                                    if (parsed?.settings) setSettings(prev => ({ ...DEFAULT_SETTINGS, ...prev, ...parsed.settings }));
-                                    showToast('Integrity seal verified. Backup restored successfully.', 'success');
+                                    if (parsedAccounts.length > 0) setAccounts(prev => [...parsedAccounts, ...prev]);
+                                    showToast('Integrity seal verified. Accounts restored (credential hashes stripped).', 'success');
                                     setBackupPassword('');
                                   });
                                 } catch (err: any) {
@@ -2978,9 +2992,21 @@ export default function App() {
                         </p>
 
                         <div className="space-y-2.5">
-                          <button onClick={handleDownloadBackup}
+                          <button onClick={() => handleExport('purified-json')}
                             className="w-full h-10 px-4 rounded-xl bg-[#00dce5] text-black hover:opacity-90 transition-all text-xs font-semibold flex items-center justify-between">
-                            <span>Download Only Auth Backup</span>
+                            <span>Purified JSON (no hashes)</span>
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button onClick={() => handleExport('plain-text')}
+                            className="w-full h-10 px-4 rounded-xl border border-white/10 hover:bg-white/5 transition-all text-xs font-semibold flex items-center justify-between text-white">
+                            <span>Plain Text URI Matrix (.txt)</span>
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button onClick={() => handleExport('html')}
+                            className="w-full h-10 px-4 rounded-xl border border-white/10 hover:bg-white/5 transition-all text-xs font-semibold flex items-center justify-between text-white">
+                            <span>Offline HTML Index</span>
                             <Download className="w-3.5 h-3.5" />
                           </button>
 
@@ -3008,7 +3034,7 @@ export default function App() {
                                 return;
                               }
                               try {
-                                const raw = JSON.stringify({ accounts, settings });
+                                const raw = buildSealedPayload(accounts, settings);
                                 const encrypted = await encryptBackup(raw, backupPassword);
                                 const blob = new Blob([encrypted], { type: 'text/plain' });
                                 const url = URL.createObjectURL(blob);

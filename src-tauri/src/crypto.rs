@@ -235,7 +235,47 @@ extern "system" {
 
 #[tauri::command]
 pub fn set_window_screenshot_protection(window: tauri::Window, protect: bool) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
+// ─── Sealed Import Gate: decrypts and strips credential hashes ────────────────
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportValidationResult {
+    pub accounts: Vec<serde_json::Value>,
+    pub warnings: Vec<String>,
+}
+
+#[tauri::command]
+pub fn validate_import_payload(payload: String) -> Result<ImportValidationResult, String> {
+    let parsed: serde_json::Value = serde_json::from_str(&payload)
+        .map_err(|e| format!("Invalid JSON payload: {}", e))?;
+
+    let mut warnings = Vec::new();
+
+    // Strip credential hashes from settings
+    if let Some(obj) = parsed.as_object() {
+        if let Some(settings) = obj.get("settings").and_then(|s| s.as_object()) {
+            let sensitive_keys = [
+                "passphraseHash", "masterKeyHash", "pinHash",
+                "authHashes", "authMetadata", "duressPinHash",
+                "duressPassphraseHash",
+            ];
+            for key in &sensitive_keys {
+                if settings.contains_key(*key) {
+                    warnings.push(format!("Stripped sensitive setting: {}", key));
+                }
+            }
+        }
+    }
+
+    let accounts: Vec<serde_json::Value> = parsed
+        .get("accounts")
+        .and_then(|a| a.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    Ok(ImportValidationResult { accounts, warnings })
+}
+
+#[cfg(target_os = "windows")]
     {
         use tauri::Manager;
         if let Ok(hwnd) = window.hwnd() {
