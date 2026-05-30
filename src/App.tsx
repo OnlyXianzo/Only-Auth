@@ -121,42 +121,64 @@ function getServiceHex(logoType: string): string {
   return hexes[logoType] || hexes['custom'];
 }
 
-// ─── Brand Logo Component with SVG/PNG Try-and-Fallback ───────────────────────
+// ─── Brand Catalog auto-recognition ───────────────────────────────────────────
+let _brandCatalog: Array<{ title: string; slug?: string; altNames?: string[]; hex?: string }> | null = null;
+
+async function loadBrandCatalog(): Promise<typeof _brandCatalog> {
+  if (_brandCatalog) return _brandCatalog;
+  try {
+    const res = await fetch('/brands/_data/custom-icons.json');
+    const data = await res.json();
+    _brandCatalog = data.icons || [];
+  } catch {
+    _brandCatalog = [];
+  }
+  return _brandCatalog;
+}
+
+function matchBrandFromCatalog(input: string): { slug: string; hex?: string } | null {
+  if (!input || !_brandCatalog) return null;
+  const lower = input.toLowerCase();
+  for (const entry of _brandCatalog) {
+    if (entry.slug && entry.slug.toLowerCase() === lower) return { slug: entry.slug, hex: entry.hex };
+    if (entry.title.toLowerCase() === lower) return { slug: entry.slug || entry.title.toLowerCase().replace(/\s+/g, '_'), hex: entry.hex };
+    if (entry.altNames?.some(a => a.toLowerCase() === lower)) return { slug: entry.slug || entry.title.toLowerCase().replace(/\s+/g, '_'), hex: entry.hex };
+    // Partial match: if input contains title or title contains input
+    if (lower.includes(entry.title.toLowerCase()) || entry.title.toLowerCase().includes(lower)) return { slug: entry.slug || entry.title.toLowerCase().replace(/\s+/g, '_'), hex: entry.hex };
+  }
+  return null;
+}
+
+// ─── Brand Logo Component with SVG Try-and-Fallback ─────────────────────────
 interface BrandLogoProps {
   name: string;
-  logoType: string;
+  logoType?: string;
   className?: string;
 }
 
 function BrandLogo({ name, logoType, className = "w-10 h-10 text-xs" }: BrandLogoProps) {
   const [imgSrc, setImgSrc] = useState<string | null>(null);
   const [failedSvg, setFailedSvg] = useState(false);
-  const [failedPng, setFailedPng] = useState(false);
 
   useEffect(() => {
     setFailedSvg(false);
-    setFailedPng(false);
-    if (!logoType || logoType === 'custom') {
+    const resolvedType = logoType || 'custom';
+    if (resolvedType === 'custom') {
       setImgSrc(null);
-    } else {
-      setImgSrc(`/brands/${logoType}.svg`);
+      return;
     }
+    setImgSrc(`/brands/icons/${resolvedType}.svg`);
   }, [logoType]);
 
   const handleError = () => {
-    if (!failedSvg) {
-      setFailedSvg(true);
-      setImgSrc(`/brands/${logoType}.png`);
-    } else if (!failedPng) {
-      setFailedPng(true);
-      setImgSrc(null);
-    }
+    setFailedSvg(true);
+    setImgSrc(null);
   };
 
-  const abbreviation = getLogoAbbreviation(name, logoType);
-  const colors = getServiceColors(logoType);
+  const abbreviation = getLogoAbbreviation(name, logoType || 'custom');
+  const colors = getServiceColors(logoType || 'custom');
 
-  if (imgSrc) {
+  if (imgSrc && !failedSvg) {
     return (
       <img
         src={imgSrc}
@@ -478,7 +500,6 @@ export default function App() {
   }, [settings.hiddenVaultSettings, activeTag]);
   const [searchQuery, setSearchQuery] = useState('');
   const [focusedAccountId, setFocusedAccountId] = useState<string>('');
-  const [secondsRemaining, setSecondsRemaining] = useState(30);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     const saved = localStorage.getItem('onlyauth_sidebar_width');
@@ -516,7 +537,7 @@ export default function App() {
   const [isVerificationModalOpen, setIsVerificationModalOpen] = useState(false);
   const [verificationInput, setVerificationInput] = useState('');
   const [verificationError, setVerificationError] = useState('');
-  const [pendingAction, setPendingAction] = useState<{ type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey'; data?: any } | null>(null);
+  const [pendingAction, setPendingAction] = useState<{ type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock'; data?: any } | null>(null);
   const [showVerificationInput, setShowVerificationInput] = useState(false);
 
   // Add/Edit form
@@ -545,6 +566,7 @@ export default function App() {
   
   // Icon Picker state
   const [showIconPicker, setShowIconPicker] = useState(false);
+  const [isSettingsUnlocked, setIsSettingsUnlocked] = useState(false);
 
   // Settings sub-states
   const [settingsSubTab, setSettingsSubTab] = useState<'layout' | 'profile' | 'passphrase' | 'tags' | 'import-export' | 'hardware' | 'app-lock'>('layout');
@@ -581,6 +603,7 @@ export default function App() {
       setUnlockInput("");
       setVerificationInput("");
       setFormSecret("");
+      setIsSettingsUnlocked(false);
     }
   }, [isLocked]);
 
@@ -610,6 +633,9 @@ export default function App() {
     };
   }, [isFirstRun]);
 
+  // ── Load brand catalog for icon auto-recognition
+  useEffect(() => { loadBrandCatalog(); }, []);
+
   // Global unmount scrubbing
   useEffect(() => {
     return () => {
@@ -627,17 +653,20 @@ export default function App() {
     };
   }, []);
 
-  // ── Timer
+  // ── Timer (1-second tick for all time-dependent updates)
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    const update = () => {
-      const now = Math.floor(Date.now() / 1000);
-      const interval = settings.autoRenewInterval || 60;
-      setSecondsRemaining(interval - (now % interval));
-    };
-    update();
-    const id = setInterval(update, 1000);
+    const id = setInterval(() => setTick(t => t + 1), 1000);
     return () => clearInterval(id);
-  }, [settings.autoRenewInterval]);
+  }, []);
+
+  // ── Seconds remaining for display (per-account computed in render)
+  const [secondsRemaining, setSecondsRemaining] = useState(30);
+  useEffect(() => {
+    const interval = settings.autoRenewInterval || 30;
+    const now = Math.floor(Date.now() / 1000);
+    setSecondsRemaining(interval - (now % interval));
+  }, [tick, settings.autoRenewInterval]);
 
   // ── Batched TOTP codes from Rust backend
   const [totpCodes, setTotpCodes] = useState<Record<string, string>>({});
@@ -666,7 +695,7 @@ export default function App() {
     };
     updateTokens();
     return () => { isCurrent = false; };
-  }, [secondsRemaining, accounts]);
+  }, [tick, accounts]);
 
   // ── Focus guard
   useEffect(() => {
@@ -1043,7 +1072,7 @@ export default function App() {
     setShowSecret(prev => !prev);
   };
 
-  const triggerVerifyAction = (type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition', data?: any) => safeTransition(() => {
+  const triggerVerifyAction = (type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock', data?: any) => safeTransition(() => {
     setPendingAction({ type, data });
     setVerificationInput('');
     setVerificationError('');
@@ -1053,11 +1082,26 @@ export default function App() {
   const handleConfirmVerification = async (e: FormEvent) => {
     e.preventDefault();
     const input = verificationInput.trim();
-    const hash = await sha256(input);
-    const valid = hash === settings.passphraseHash || hash === settings.masterKeyHash;
+    const valid = await (async () => {
+      // 1. Check Argon2id authHashes (primary)
+      if (settings.authHashes && settings.authHashes.length > 0) {
+        for (const hash of settings.authHashes) {
+          if (await argon2idVerify(hash, input)) return true;
+        }
+      }
+      // 2. Legacy fallback checks (with PIN support)
+      const hash = await sha256(input);
+      if (settings.pinHash && hash === settings.pinHash) return true;
+      if (settings.passphraseHash && hash === settings.passphraseHash) return true;
+      if (settings.masterKeyHash && hash === settings.masterKeyHash) return true;
+      return false;
+    })();
     if (valid) {
       safeTransition(() => {
-        if (pendingAction?.type === 'save') {
+        if (pendingAction?.type === 'settings-unlock') {
+          setIsSettingsUnlocked(true);
+          setActiveTag('settings');
+        } else if (pendingAction?.type === 'save') {
           saveAccountConfirmed();
         } else if (pendingAction?.type === 'delete') {
           deleteAccountConfirmed(pendingAction.data);
@@ -1114,7 +1158,7 @@ export default function App() {
         setPendingAction(null);
       });
     } else {
-      setVerificationError('Incorrect current passphrase or master key.');
+      setVerificationError('Incorrect passphrase, master key, or PIN.');
     }
   };
 
@@ -1745,6 +1789,14 @@ export default function App() {
     { value: 'support', label: 'Support', icon: HelpCircle },
   ];
 
+  const handleSettingsClick = () => {
+    if (isSettingsUnlocked) {
+      setActiveTag('settings');
+    } else {
+      triggerVerifyAction('settings-unlock');
+    }
+  };
+
   return (
     <div className={`relative min-h-screen w-full flex select-none text-[#e5e2e1] font-sans antialiased overflow-hidden ${isTransitioning ? 'pointer-events-none opacity-90' : ''}`}
       style={{
@@ -1892,7 +1944,7 @@ export default function App() {
               const Icon = tab.icon;
               const isActive = activeTag === tab.value;
               return (
-                <button key={tab.value} onClick={() => safeTransition(() => { setActiveTag(tab.value); setMobileDrawerOpen(false); })}
+                <button key={tab.value} onClick={tab.value === 'settings' ? handleSettingsClick : () => safeTransition(() => { setActiveTag(tab.value); setMobileDrawerOpen(false); })}
                   className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all duration-150 ease-out border-l-[3px] ${
                     isActive ? 'bg-white/5 text-white border-[#00dce5] font-semibold' : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
                   } ${sidebarCollapsed ? 'justify-center px-0 border-l-0 rounded-full w-10 h-10 mx-auto' : ''}`}>
@@ -3231,7 +3283,14 @@ export default function App() {
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">Issuer</label>
-                    <input type="text" required value={formName} onChange={e => setFormName(e.target.value)} placeholder="e.g. GitHub"
+                    <input type="text" required value={formName} onChange={e => {
+  const val = e.target.value;
+  setFormName(val);
+  if (val && val.trim()) {
+    const match = matchBrandFromCatalog(val.trim());
+    if (match) setFormLogoType(match.slug);
+  }
+}} placeholder="e.g. GitHub"
                       className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
                   </div>
                   <div className="space-y-1.5">
