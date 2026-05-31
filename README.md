@@ -93,7 +93,8 @@ bunx tauri dev
   threat models.
 - **[Feature Guide](Docs/FEATURES.md)**: Detailed documentation of application
   capabilities.
-- **[Security & Safety](SECRET.md)**: Best practices for vault management.
+- **[Security & Specialized Secrets](Docs/SECRET.md)**: Detailed documentation
+  on Hidden Keys, duress systems, and memory safety.
 
 ## Contributing
 
