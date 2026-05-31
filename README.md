@@ -1,73 +1,200 @@
 # Only Auth
 
-> **Status: Under Development.** This application is currently in an active development phase. Cross-device stability and cryptographic edge-case testing are ongoing. Use in production environments is at your own risk until a stable 1.0 release is announced.
+A local-first, zero-knowledge authenticator for professionals who refuse to compromise on security and privacy.
 
-Only Auth is a local-first, zero-knowledge 2FA/TOTP authenticator and credential manager designed for extreme privacy and performance. Built with Tauri v2, React 19, TypeScript, and a high-security Rust cryptographic backend, it ensures that your sensitive data never leaves your device.
+---
 
 ## Overview
 
-Only Auth rejects centralized cloud synchronization in favor of complete client-side data ownership. The architecture is engineered for a low memory footprint, zero telemetry, and maximum security on all hardware tiers, including low-specification systems.
+Only Auth is a desktop authenticator and credential manager built for organizations and individuals who require absolute control over sensitive authentication data. Unlike cloud-based alternatives, Only Auth keeps all credentials on your device with zero external data transmission.
 
-## Key Features
+**Core Principle:** Your data, your device, your control.
 
-### Security and Privacy
-*   **Hardened Key Derivation:** Utilizes Argon2id for deriving master encryption keys from user passphrases, configured to resist GPU-accelerated brute-force attacks.
-*   **Memory Safety:** Employs strict memory lifecycle management with Rust-based zeroization, ensuring that unencrypted secrets are immediately scrubbed from system RAM after use.
-*   **Ghost Mode (Hidden Vault):** Supports a secondary, hidden vault layer for plausible deniability, accessible only via specific search-bar triggers.
-*   **Panic and Duress Mechanisms:** Includes specialized PINs for triggering silent vault wipes or transitioning to fake empty states in high-risk scenarios.
-*   **Anti-Screenshot and Privacy Masking:** Prevents unauthorized screen captures and automatically obscures the interface when the application window loses focus.
-*   **Asymmetric Audit Logging:** Maintains a zero-knowledge, append-only activity log encrypted with a local public key, readable only by the authenticated user.
+---
 
-### Organization and UX
-*   **Dynamic Tagging System:** Flexible account categorization replacing traditional folder structures.
-*   **Clinical UI/UX:** A high-end, obsidian-themed interface with neon accents and glassmorphism, optimized for professional use.
-*   **Batch TOTP Generation:** A high-performance Rust bridge that generates codes for all active accounts in a single pass to eliminate lag.
-*   **Comprehensive Import Pipeline:** Dedicated support for migrating from Bitwarden, Ente Auth, and Google Authenticator.
+## Why Only Auth?
 
-## Architecture
+### For Security-First Organizations
+- **Zero Trust Architecture:** No cloud dependencies, no third-party access to authentication tokens
+- **Cryptographic Auditability:** Full transparency into security mechanisms using open-source Rust implementation
+- **Compliance Ready:** Supports isolated credential storage for regulated industries (finance, healthcare, government)
+- **Incident Response:** Complete data ownership enables immediate credential rotation without vendor delays
 
-Only Auth utilizes a dual-layer architecture to balance performance and security.
+### For Individual Users
+- **True Privacy:** No analytics, telemetry, or behavioral tracking
+- **Offline-First:** Works completely without internet connectivity
+- **Hardware Efficient:** Optimized for minimal resource consumption across all platforms
+- **Open Source:** Full transparency and community-driven security audits
 
-### Core Technology Stack
-*   **Native Shell:** Tauri v2 (Rust)
-*   **UI Framework:** React 19, TypeScript, Vite
-*   **Styling:** Tailwind CSS v4
-*   **Animation:** Motion
-*   **Cryptographic Primitives:** totp-rs, argon2, aes-gcm, zeroize
+---
 
-### Security Model
-The system operates under Kerckhoffs's Principle, remaining secure even if its implementation details are known, provided the master key remains confidential. Data is protected at rest using AES-256 encryption and in transit (during local sync) using mutual TLS 1.3.
+## Security Architecture
+
+Only Auth implements multi-layered security by default:
+
+### Encryption & Key Management
+- **AES-256-GCM** for all data at rest
+- **Argon2id** key derivation with GPU-resistant parameters
+- **Memory Zeroization:** Secrets are cryptographically erased from RAM immediately after use using Rust-based lifecycle management
+
+### Advanced Features
+- **Ghost Mode:** Secondary hidden vault with plausible deniability
+- **Duress Mechanisms:** Emergency vault wipe or decoy mode activation via specialized PIN
+- **Anti-Forensics:** Screenshot prevention and automatic interface masking on window blur
+- **Asymmetric Audit Logging:** Append-only activity log encrypted with user's public key
+
+### Attack Surface Reduction
+- **Local-Only Processing:** No network exposure for credential operations
+- **No Third-Party SDKs:** Eliminates supply-chain attack vectors
+- **Hardware Isolation:** Leverages OS-level credential storage when available
+
+---
+
+## Technical Specifications
+
+| Component | Technology | Rationale |
+|-----------|-----------|-----------|
+| **Native Runtime** | Tauri v2 + Rust | Type safety and memory safety |
+| **UI Framework** | React 19 + TypeScript | Modern developer experience |
+| **Cryptography** | Rust (argon2, aes-gcm, zeroize) | Hardened crypto implementation |
+| **Styling** | Tailwind CSS v4 | Minimal footprint, professional design |
+| **Platform Support** | Windows, Linux, macOS, Android | Desktop-first with mobile expansion |
+
+---
+
+## Feature Comparison
+
+| Feature | Only Auth | Google Auth | Microsoft Auth | Bitwarden | 1Password |
+|---------|-----------|-----------|----------|-----------|----------|
+| **Local-First** | ✓ | ✗ | ✗ | ✓ | ✓ |
+| **Zero Knowledge** | ✓ | ✗ | ✗ | ✓ | ✓ |
+| **Ghost Mode** | ✓ | ✗ | ✗ | ✗ | ✗ |
+| **Duress Mechanism** | ✓ | ✗ | ✗ | ✗ | ✗ |
+| **Open Source** | ✓ | ✗ | ✗ | ✓ | ✗ |
+| **No Cloud Sync Required** | ✓ | ✗ | ✗ | ✗ | ✗ |
+| **Anti-Screenshot** | ✓ | ✗ | ✗ | ✗ | ✓ |
+
+---
+
+## Supported Import Sources
+
+Seamlessly migrate from existing authenticators:
+- Google Authenticator (otpauth:// URI format)
+- Microsoft Authenticator
+- Bitwarden Authenticator
+- Ente Auth
+- Custom otpauth:// URIs
+
+All imports preserve your destination device credentials—your authentication secrets never transit through Only Auth's systems.
+
+---
 
 ## Getting Started
 
-### Prerequisites
-*   Bun (JavaScript runtime and package manager)
-*   Rust toolchain (for Tauri v2 compilation)
+### System Requirements
+- **Windows:** 10 or later (x64)
+- **Linux:** Ubuntu 20.04+ or equivalent (x64)
+- **macOS:** 11 or later (Intel/Apple Silicon)
+- **Android:** 8.0 or later
 
-### Development
+### Installation
+
+Download the latest release for your platform from the [Releases page](https://github.com/OnlyXianzo/Only-Auth/releases).
+
+### Development Setup
+
+**Prerequisites:**
+- Bun (JavaScript runtime and package manager)
+- Rust toolchain (Tauri v2 compilation)
+- Git
+
+**Development Environment:**
 ```bash
+# Clone repository
+git clone https://github.com/OnlyXianzo/Only-Auth.git
+cd Only-Auth
+
 # Install dependencies
 bun install
 
-# Start the Vite development server (web preview)
+# Launch development server
 bun run dev
 
-# Launch the Tauri desktop application in development mode
+# Start Tauri development application
 bunx tauri dev
 ```
 
-### Production Build
+**Production Build:**
 ```bash
-# Build the frontend and compile the native application
+# Build frontend and compile native application
 bun run build
 bunx tauri build
+
+# Output artifacts:
+# - Windows: src-tauri/target/release/bundle/nsis/
+# - Linux: src-tauri/target/release/bundle/deb/
+# - macOS: src-tauri/target/release/bundle/dmg/
+# - Android: src-tauri/gen/android/app/build/outputs/apk/
 ```
 
+---
+
 ## Documentation
-Detailed technical information is available in the following documents:
-*   [Architecture Specification](Docs/ARCHITECTURE.md)
-*   [Feature Guide](Docs/FEATURES.md)
-*   [Security and Safety Features](SECRET.md)
+
+- **[Architecture Specification](Docs/ARCHITECTURE.md)** - Technical system design and threat model
+- **[Feature Guide](Docs/FEATURES.md)** - Detailed feature documentation
+- **[Security & Safety](SECRET.md)** - Security implementation and best practices
+
+---
+
+## Security Considerations
+
+### Before Using in Production
+1. Audit this codebase or request a security review
+2. Test credential recovery procedures
+3. Verify platform-specific security features on your target OS
+4. Review the threat model in the Architecture Specification
+
+### Responsible Disclosure
+Security vulnerabilities should be reported privately to the maintainers. Please do not file public issues for security-sensitive topics.
+
+---
+
+## Contributing
+
+Contributions are welcome. Areas of particular interest:
+- Security audits and cryptographic reviews
+- Cross-platform testing
+- Performance optimization
+- Documentation improvements
+- Translation support
+
+---
 
 ## License
-This project is licensed under the MIT License.
+
+MIT License - See LICENSE file for details.
+
+---
+
+## Project Status
+
+**Development Stage:** Beta (v0.1.x)
+
+Current focus areas:
+- Cross-device stability testing
+- Cryptographic edge-case validation
+- Platform-specific security integration
+- Performance optimization
+
+Not recommended for critical production use until v1.0 release. Users accept responsibility for data loss or security incidents during beta phase.
+
+---
+
+## Technology Stack Attribution
+
+This project leverages exceptional open-source projects:
+- [Tauri](https://tauri.app/) - Desktop application framework
+- [React](https://react.dev/) - UI library
+- [Rust Cryptography](https://rust-lang.org/) - Cryptographic implementation
+- [TOTP-rs](https://github.com/mpalmer/rust-totp) - TOTP generation
