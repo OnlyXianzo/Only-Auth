@@ -281,7 +281,7 @@ export default function App() {
   useEffect(() => { localStorage.setItem('onlyauth_settings_v3', JSON.stringify(settings)); }, [settings]);
 
   // ── Auth state
-  const isFirstRun = !settings.passphraseHash;
+  const isFirstRun = (!settings.authHashes || settings.authHashes.length === 0) && !settings.passphraseHash;
   const [isLocked, setIsLocked] = useState(true);
 
   // ── Mobile Responsive & UX State Variables
@@ -1439,7 +1439,7 @@ export default function App() {
   const focusedAccount = visibleAccounts.find(a => a.id === focusedAccountId) || visibleAccounts[0] || null;
   const focusedCode = focusedAccount ? (totpCodes[focusedAccount.id] || '------') : '------';
   const focusedCodeFormatted = formatFocusedCode(focusedCode);
-  const passkeyStrength = getSecurityStrength(settings.passphraseHash || 'default');
+  const passkeyStrength = getSecurityStrength(settings.authHashes && settings.authHashes.length > 0 ? 'fortified_passphrase_length_etc' : (settings.passphraseHash || 'default'));
   const isVaultTab = !['security', 'settings', 'support'].includes(activeTag);
 
   // ── SETUP SCREEN ─────────────────────────────────────────────────────────

@@ -1,0 +1,21 @@
+[[permission]]
+identifier = "allow-all-commands"
+description = "Allows invoking all custom commands in the main binary"
+commands.allow = [
+  "validate_base32",
+  "generate_secret",
+  "generate_totp_batch",
+  "load_vault_data",
+  "save_vault_data",
+  "argon2id_hash",
+  "argon2id_verify",
+  "secure_compare",
+  "encrypt_backup",
+  "decrypt_backup",
+  "write_audit_log",
+  "read_audit_logs",
+  "set_window_screenshot_protection",
+  "encrypt_metadata",
+  "decrypt_metadata",
+  "validate_import_payload"
+]
