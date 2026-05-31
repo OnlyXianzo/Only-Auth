@@ -1,97 +1,62 @@
 # Only Auth
 
-A local-first, zero-knowledge authenticator for professionals who refuse to compromise on security and privacy.
+Only Auth is a local-first, zero-knowledge 2FA and TOTP authenticator designed for
+professionals who prioritize security and privacy. You maintain complete control
+over your authentication data, which never leaves your device.
 
----
-
-## Overview
-
-Only Auth is a desktop authenticator and credential manager built for organizations and individuals who require absolute control over sensitive authentication data. Unlike cloud-based alternatives, Only Auth keeps all credentials on your device with zero external data transmission.
-
-**Core Principle:** Your data, your device, your control.
-
----
+<!-- prettier-ignore -->
+> [!WARNING]
+> This application is in a very early beta phase (v0.1.x). It is under active
+> development, and we are currently resolving a high volume of errors daily.
+> We do not recommend using this for critical production credentials until the
+> v1.0 release. Use at your own risk.
 
 ## Why Only Auth?
 
-### For Security-First Organizations
-- **Zero Trust Architecture:** No cloud dependencies, no third-party access to authentication tokens
-- **Cryptographic Auditability:** Full transparency into security mechanisms using open-source Rust implementation
-- **Compliance Ready:** Supports isolated credential storage for regulated industries (finance, healthcare, government)
-- **Incident Response:** Complete data ownership enables immediate credential rotation without vendor delays
+Only Auth provides a secure alternative to cloud-based authenticators by
+ensuring your secrets remain local and encrypted.
 
-### For Individual Users
-- **True Privacy:** No analytics, telemetry, or behavioral tracking
-- **Offline-First:** Works completely without internet connectivity
-- **Hardware Efficient:** Optimized for minimal resource consumption across all platforms
-- **Open Source:** Full transparency and community-driven security audits
-
----
+- **Complete Data Ownership:** You own your data. The application operates
+  without any external data transmission or cloud dependencies.
+- **Cryptographic Integrity:** The system uses high-end encryption primitives
+  implemented in Rust to secure your vault.
+- **Zero Telemetry:** The application does not collect analytics, behavioral
+  tracking, or any form of telemetry.
+- **Offline Reliability:** You can access your authentication codes anytime,
+  anywhere, without an internet connection.
 
 ## Security Architecture
 
-Only Auth implements multi-layered security by default:
+The application implements multiple layers of defense to protect your sensitive
+information.
 
-### Encryption & Key Management
-- **AES-256-GCM** for all data at rest
-- **Argon2id** key derivation with GPU-resistant parameters
-- **Memory Zeroization:** Secrets are cryptographically erased from RAM immediately after use using Rust-based lifecycle management
+- **Argon2id Key Derivation:** The system derives your master encryption key
+  using memory-hard Argon2id parameters to resist brute-force attacks.
+- **AES-256-GCM Encryption:** All data at rest is secured using industry-
+  standard AES-256-GCM encryption within a SQLCipher database.
+- **Memory Security:** The Rust backend utilizes zeroizing allocators to
+  ensure secrets are scrubbed from system RAM immediately after use.
+- **Display Protections:** The interface applies clinical blur masks when the
+  window loses focus and prevents unauthorized screen captures.
 
-### Advanced Features
-- **Ghost Mode:** Secondary hidden vault with plausible deniability
-- **Duress Mechanisms:** Emergency vault wipe or decoy mode activation via specialized PIN
-- **Anti-Forensics:** Screenshot prevention and automatic interface masking on window blur
-- **Asymmetric Audit Logging:** Append-only activity log encrypted with user's public key
+## Features
 
-### Attack Surface Reduction
-- **Local-Only Processing:** No network exposure for credential operations
-- **No Third-Party SDKs:** Eliminates supply-chain attack vectors
-- **Hardware Isolation:** Leverages OS-level credential storage when available
+Only Auth includes specialized security tools designed for high-risk
+environments.
 
----
-
-## Technical Specifications
-
-| Component | Technology | Rationale |
-|-----------|-----------|-----------|
-| **Native Runtime** | Tauri v2 + Rust | Type safety and memory safety |
-| **UI Framework** | React 19 + TypeScript | Modern developer experience |
-| **Cryptography** | Rust (argon2, aes-gcm, zeroize) | Hardened crypto implementation |
-| **Styling** | Tailwind CSS v4 | Minimal footprint, professional design |
-| **Platform Support** | Windows, Linux, macOS, Android | Desktop-first with mobile expansion |
-
----
-
-## Feature Comparison
-
-| Feature | Only Auth | Google Auth | Microsoft Auth | Bitwarden | 1Password |
-|---------|-----------|-----------|----------|-----------|----------|
-| **Local-First** | ✓ | ✗ | ✗ | ✓ | ✓ |
-| **Zero Knowledge** | ✓ | ✗ | ✗ | ✓ | ✓ |
-| **Ghost Mode** | ✓ | ✗ | ✗ | ✗ | ✗ |
-| **Duress Mechanism** | ✓ | ✗ | ✗ | ✗ | ✗ |
-| **Open Source** | ✓ | ✗ | ✗ | ✓ | ✗ |
-| **No Cloud Sync Required** | ✓ | ✗ | ✗ | ✗ | ✗ |
-| **Anti-Screenshot** | ✓ | ✗ | ✗ | ✗ | ✓ |
-
----
-
-## Supported Import Sources
-
-Seamlessly migrate from existing authenticators:
-- Google Authenticator (otpauth:// URI format)
-- Microsoft Authenticator
-- Bitwarden Authenticator
-- Ente Auth
-- Custom otpauth:// URIs
-
-All imports preserve your destination device credentials—your authentication secrets never transit through Only Auth's systems.
-
----
+- **Hidden Keys:** You can create a secondary vault layer for sensitive
+  accounts that remains invisible during standard operation.
+- **Duress Mechanisms:** The system supports a duress PIN to trigger a silent
+  vault wipe or switch to a decoy state.
+- **Dynamic Tagging:** You can organize your accounts using a flexible tagging
+  system instead of rigid folders.
+- **Universal Import:** You can migrate seamlessly from Google Authenticator,
+  Microsoft Authenticator, Bitwarden, and Ente Auth.
 
 ## Getting Started
 
 ### System Requirements
+
 - **Windows:** 10 or later (x64)
 - **Linux:** Ubuntu 20.04+ or equivalent (x64)
 - **macOS:** 11 or later (Intel/Apple Silicon)
@@ -99,102 +64,42 @@ All imports preserve your destination device credentials—your authentication s
 
 ### Installation
 
-Download the latest release for your platform from the [Releases page](https://github.com/OnlyXianzo/Only-Auth/releases).
+You can download the latest beta release for your platform from the [Releases
+page](https://github.com/OnlyXianzo/Only-Auth/releases).
 
 ### Development Setup
 
-**Prerequisites:**
-- Bun (JavaScript runtime and package manager)
-- Rust toolchain (Tauri v2 compilation)
-- Git
+To set up a local development environment, ensure you have Bun, the Rust
+toolchain, and Git installed.
 
-**Development Environment:**
 ```bash
-# Clone repository
+# Clone the repository
 git clone https://github.com/OnlyXianzo/Only-Auth.git
 cd Only-Auth
 
 # Install dependencies
 bun install
 
-# Launch development server
+# Launch the development server
 bun run dev
 
-# Start Tauri development application
+# Start the Tauri development application
 bunx tauri dev
 ```
 
-**Production Build:**
-```bash
-# Build frontend and compile native application
-bun run build
-bunx tauri build
-
-# Output artifacts:
-# - Windows: src-tauri/target/release/bundle/nsis/
-# - Linux: src-tauri/target/release/bundle/deb/
-# - macOS: src-tauri/target/release/bundle/dmg/
-# - Android: src-tauri/gen/android/app/build/outputs/apk/
-```
-
----
-
 ## Documentation
 
-- **[Architecture Specification](Docs/ARCHITECTURE.md)** - Technical system design and threat model
-- **[Feature Guide](Docs/FEATURES.md)** - Detailed feature documentation
-- **[Security & Safety](SECRET.md)** - Security implementation and best practices
-
----
-
-## Security Considerations
-
-### Before Using in Production
-1. Audit this codebase or request a security review
-2. Test credential recovery procedures
-3. Verify platform-specific security features on your target OS
-4. Review the threat model in the Architecture Specification
-
-### Responsible Disclosure
-Security vulnerabilities should be reported privately to the maintainers. Please do not file public issues for security-sensitive topics.
-
----
+- **[Architecture Specification](Docs/ARCHITECTURE.md)**: Technical design and
+  threat models.
+- **[Feature Guide](Docs/FEATURES.md)**: Detailed documentation of application
+  capabilities.
+- **[Security & Safety](SECRET.md)**: Best practices for vault management.
 
 ## Contributing
 
-Contributions are welcome. Areas of particular interest:
-- Security audits and cryptographic reviews
-- Cross-platform testing
-- Performance optimization
-- Documentation improvements
-- Translation support
-
----
+We welcome contributions to improve security, performance, and documentation.
+Please review our contributing guidelines before submitting a pull request.
 
 ## License
 
-MIT License - See LICENSE file for details.
-
----
-
-## Project Status
-
-**Development Stage:** Beta (v0.1.x)
-
-Current focus areas:
-- Cross-device stability testing
-- Cryptographic edge-case validation
-- Platform-specific security integration
-- Performance optimization
-
-Not recommended for critical production use until v1.0 release. Users accept responsibility for data loss or security incidents during beta phase.
-
----
-
-## Technology Stack Attribution
-
-This project leverages exceptional open-source projects:
-- [Tauri](https://tauri.app/) - Desktop application framework
-- [React](https://react.dev/) - UI library
-- [Rust Cryptography](https://rust-lang.org/) - Cryptographic implementation
-- [TOTP-rs](https://github.com/mpalmer/rust-totp) - TOTP generation
+This project is licensed under the MIT License.

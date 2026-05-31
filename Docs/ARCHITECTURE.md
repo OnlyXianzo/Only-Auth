@@ -1,36 +1,60 @@
-# Only Auth Architecture Specification
+# Architecture Specification
 
-Only Auth is engineered as a local-first, zero-knowledge cryptographic vault for 2FA/TOTP management. The system is designed to provide high-security authentication without reliance on centralized cloud services, prioritizing data ownership and privacy.
+Only Auth is a local-first, zero-knowledge cryptographic vault designed for
+TOTP management. The system architecture prioritizes data ownership, memory
+safety, and cryptographic rigor.
+
+<!-- prettier-ignore -->
+> [!WARNING]
+> This architecture is under active development and may change as we address
+> early beta feedback and resolve ongoing implementation errors.
 
 ## System Overview
 
-The application utilizes a dual-layer architecture consisting of a native cryptographic backend and a reactive frontend.
+The application uses a dual-layer architecture that separates the reactive
+frontend from the native cryptographic backend.
 
-### Core Tech Stack
-*   **Backend:** Tauri v2 (Rust)
-*   **Frontend:** React 19, TypeScript, Vite, Tailwind CSS
-*   **Storage:** SQLCipher (SQLite with AES-256-GCM row-level encryption)
+- **Native Backend:** Tauri v2 (Rust) manages the filesystem, cryptography, and
+  hardware integration.
+- **Reactive Frontend:** React 19 and TypeScript provide a high-performance,
+  clinical user interface.
+- **Encrypted Storage:** SQLCipher provides a secure SQLite container with
+  AES-256-GCM encryption for all stored credentials.
 
-## Security Layers
+## Cryptographic Foundation
 
-### 1. Key Derivation Function (KDF)
-Only Auth employs Argon2id for deriving the master encryption key from the user's passphrase.
-*   **Memory Cost:** 128 MB
-*   **Time Cost:** 3 iterations
-*   **Parallelism:** 4 threads
-This configuration is optimized to resist GPU-accelerated brute-force attacks while maintaining performance on modern desktop hardware.
+The security model relies on a user-derived master key to unlock the encrypted
+vault.
 
-### 2. Memory Safety and Scrubbing
-To prevent secrets from lingering in system RAM, Only Auth implements strict memory lifecycle management:
-*   **Rust Zeroization:** All raw cryptographic seeds and decoded Base32 secrets are wrapped in zeroing allocators. The memory space is explicitly overwritten with `0x00` immediately after a TOTP code is generated.
-*   **Frontend Transitions:** Sensitive state variables in the React frontend (e.g., input buffers for passphrases and secrets) are manually scrubbed during view transitions and modal unmounts.
-*   **Safe Transitions:** Interactive state changes are wrapped in thread stabilizers to prevent concurrent rendering crashes within the WebKit environment.
+- **Key Derivation (KDF):** The system uses Argon2id to derive a 256-bit master
+  key from your mnemonic passphrase.
+- **Entropy Scheme:** You can choose between 12, 18, or 24-word mnemonic phrases
+  during setup, providing up to 256 bits of entropy.
+- **Master Key Override:** The system generates a hexadecimal Master Key
+  (`oa_sk_...`) that serves as a direct cryptographic backup for your
+  passphrase.
 
-### 3. Asymmetric Audit Logging
-The system maintains a zero-knowledge append-only activity log:
-*   **Encryption:** Events are encrypted using a local public key stored on disk.
-*   **Access:** The matching private key is itself encrypted using a key derived from the user's master passphrase. Logs can only be decrypted and read after a successful vault unlock.
+## Memory Safety
+
+The application implements strict memory lifecycle management to prevent
+sensitive data from lingering in system RAM.
+
+- **Rust Zeroization:** The backend wraps all raw seeds and decoded secrets in
+  zeroing allocators. The system overwrites this memory with `0x00`
+  immediately after generating a TOTP code.
+- **Frontend Scrubbing:** The React layer clears sensitive input buffers during
+  view transitions and modal unmounts.
+- **IPC Security:** The Inter-Process Communication (IPC) bridge ensures that
+  unencrypted secrets are only passed between layers when absolutely necessary.
 
 ## Platform Integration
 
-By leveraging Tauri v2, Only Auth utilizes the host operating system's native Webview (Webkit on macOS/Linux, WebView2 on Windows). This results in a significantly reduced memory footprint compared to Electron-based alternatives and allows for deep integration with system-level security features such as native window blur masking and display affinity protections.
+Only Auth leverages Tauri v2 to integrate with native host security features
+while maintaining a minimal resource footprint.
+
+- **Native Webview:** The app uses the host's native webview engine (WebKit or
+  WebView2), reducing memory usage compared to Electron.
+- **Window Protections:** The system hooks into OS-level APIs to prevent screen
+  recording and automatically masks the window content when it loses focus.
+- **Secure Storage:** Where available, the system utilizes platform-specific
+  keychains to further secure the derived master key.

@@ -1,37 +1,61 @@
-# Only Auth Features
+# Application Features
 
-Only Auth provides a comprehensive suite of tools for secure 2FA management, combining high-end security with a premium user experience.
+Only Auth provides a comprehensive set of security and organizational tools
+designed for professional credential management.
 
-## Security and Privacy Features
+<!-- prettier-ignore -->
+> [!WARNING]
+> These features are in a very early beta state. You may encounter errors or
+> unexpected behavior as we continue to refine the implementation.
 
-### 1. Ghost Mode (Hidden Vault)
-Ghost Mode allows users to create a secondary, hidden vault layer. By naming a tag `hidden` or `hide`, the system establishes a separate encrypted enclave.
-*   **Invisible by Default:** Accounts in the hidden vault are excluded from all standard lists and search results.
-*   **Search-Based Unlocking:** The vault is only unsealed by typing a specific passcode directly into the dashboard search bar.
-*   **Auto-Reseal:** The hidden vault instantly re-seals upon focus loss or navigation.
+## Security and Privacy
 
-### 2. Panic and Duress Mechanisms
-*   **Duress PIN:** A secondary PIN that, when entered, can trigger a silent "wipe" of the vault or transition to a "fake" empty state, providing plausible deniability in high-risk situations.
-*   **Failed Attempt Lockout:** After 5 consecutive incorrect PIN attempts, the system locks out quick access and requires the master recovery passphrase to reset security credentials.
+The application includes several advanced mechanisms to protect your vault in
+high-risk scenarios.
 
-### 3. Privacy Protections
-*   **Anti-Screenshot:** Platform-native hooks prevent unauthorized screen captures of the application window.
-*   **Active Blur Masking:** The UI automatically applies a clinical blur overlay when the application window loses focus.
-*   **Clipboard Auto-Wipe:** Copied TOTP codes are automatically cleared from the system clipboard after 30 seconds, accompanied by a countdown notification.
+### Hidden Keys
+
+Hidden Keys (formerly Ghost Mode) allows you to create an invisible vault layer.
+You can tag accounts as `hidden` to exclude them from standard views.
+
+- **Invisible Operation:** Accounts tagged as `hidden` do not appear in lists
+  or search results by default.
+- **Secure Unlocking:** You can only reveal Hidden Keys by entering a specific
+  passcode directly into the dashboard search bar.
+- **Automatic Resealing:** The hidden vault layer automatically reseals when
+  the application loses focus or you navigate away from the dashboard.
+
+### Duress Mechanisms
+
+The system provides protections for situations where you may be forced to
+unlock your device.
+
+- **Duress PIN:** You can configure a secondary PIN that triggers a silent
+  wipe of the vault or displays a decoy empty state.
+- **Lockout Policy:** The system enforces a lockout after 5 consecutive
+  incorrect PIN attempts, requiring your master recovery phrase to reset.
+
+### Privacy Protections
+
+The interface includes built-in safeguards to prevent accidental data leaks.
+
+- **Anti-Screenshot:** Native hooks block unauthorized screen captures of the
+  vault content.
+- **Active Masking:** The UI applies a clinical blur overlay whenever the
+  application window loses focus.
+- **Clipboard Management:** The system automatically clears copied TOTP codes
+  from your clipboard after 30 seconds.
 
 ## Organization and UX
 
-### 1. Dynamic Tagging System
-Only Auth replaces complex folder structures with a flexible tagging system. Accounts can be categorized, filtered, and searched based on custom labels like "Personal", "Work", or "Finance".
+Only Auth combines high-security features with a professional, streamlined
+user experience.
 
-### 2. Premium Clinical UI
-The interface follows a "Clinical" design aesthetic, utilizing sub-pixel neon accents, organic glassmorphism, and micro-animations to provide a professional, bespoke feel.
-*   **Brand Logo Engine:** Automatically fetches and displays brand logos for recognized services, falling back to stylish initials for custom entries.
-*   **Batch TOTP Generation:** A unified Rust bridge generates codes for all visible accounts in a single pass, ensuring zero lag and optimal performance.
-
-### 3. Import and Export
-Only Auth supports seamless migration with dedicated parsers for:
-*   Encrypted and Decrypted JSON backups.
-*   Ente Auth JSON imports.
-*   Bitwarden JSON exports (parsing `otpauth://` URIs).
-*   HMAC-sealed AES-GCM local backups.
+- **Dynamic Tagging:** You can categorize and filter your accounts using
+  customizable tags instead of traditional folders.
+- **Clinical UI:** The interface uses glassmorphism and micro-animations to
+  provide a clear, responsive, and professional experience.
+- **Unified Generation:** The Rust backend generates all visible TOTP codes
+  in a single pass, ensuring zero UI lag and accurate synchronization.
+- **Seamless Migration:** You can import existing data from Google
+  Authenticator, Bitwarden, Ente Auth, and Microsoft Authenticator.
