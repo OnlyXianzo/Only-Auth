@@ -50,10 +50,15 @@ pub fn generate_secret() -> String {
 }
 
 #[tauri::command]
-pub async fn generate_totp_batch(accounts: Vec<AccountInput>) -> Result<HashMap<String, String>, String> {
+pub async fn generate_totp_batch(accounts: Vec<AccountInput>, time_offset: Option<i64>) -> Result<HashMap<String, String>, String> {
     use totp_rs::{Algorithm, TOTP, Secret};
     
     let mut results = HashMap::new();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs() as i64;
+    let adjusted_time = (now + time_offset.unwrap_or(0)) as u64;
 
     for account in accounts {
         let cleaned = clean_secret(&account.secret);
@@ -72,7 +77,7 @@ pub async fn generate_totp_batch(accounts: Vec<AccountInput>) -> Result<HashMap<
                 
                 match TOTP::new(algorithm, digits, 1, period, secret_bytes) {
                     Ok(totp) => {
-                        match totp.generate_current() {
+                        match totp.generate_at(adjusted_time) {
                             Ok(code) => {
                                 results.insert(account.id, code);
                             }

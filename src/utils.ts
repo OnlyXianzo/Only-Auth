@@ -31,9 +31,9 @@ function base32Decode(encoded: string): Uint8Array {
 }
 
 // ─── RFC 6238 TOTP via Web Crypto API (browser fallback) ──────────────────────
-async function rfc6238TOTP(secret: string, digits: number, period: number, algorithm: string): Promise<string> {
+async function rfc6238TOTP(secret: string, digits: number, period: number, algorithm: string, timeOffsetSeconds: number = 0): Promise<string> {
   const keyBytes = base32Decode(secret);
-  const now = Math.floor(Date.now() / 1000);
+  const now = Math.floor(Date.now() / 1000) + timeOffsetSeconds;
   const counter = Math.floor(now / period);
   const counterBuf = new ArrayBuffer(8);
   const view = new DataView(counterBuf);
@@ -50,11 +50,11 @@ async function rfc6238TOTP(secret: string, digits: number, period: number, algor
   return otp.toString().padStart(digits, '0');
 }
 
-export async function generateBatchTOTP(accounts: BatchInput[]): Promise<Record<string, string>> {
+export async function generateBatchTOTP(accounts: BatchInput[], timeOffsetSeconds: number = 0): Promise<Record<string, string>> {
   const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
   if (isTauri) {
     try {
-      return await invoke<Record<string, string>>('generate_totp_batch', { accounts });
+      return await invoke<Record<string, string>>('generate_totp_batch', { accounts, timeOffset: timeOffsetSeconds });
     } catch {
       // Fall through to RFC 6238 generation if invoke fails
     }
@@ -64,7 +64,7 @@ export async function generateBatchTOTP(accounts: BatchInput[]): Promise<Record<
   const result: Record<string, string> = {};
   for (const acc of accounts) {
     try {
-      const code = await rfc6238TOTP(acc.secret, acc.digits || 6, acc.period || 30, acc.algorithm || 'SHA1');
+      const code = await rfc6238TOTP(acc.secret, acc.digits || 6, acc.period || 30, acc.algorithm || 'SHA1', timeOffsetSeconds);
       result[acc.id] = code;
     } catch {
       result[acc.id] = '------';
@@ -163,22 +163,27 @@ export async function saveVaultData(accounts: Account[], keyHex?: string): Promi
 }
 
 /**
- * Helper to split a 6-digit code with space or bullet like "552 109"
+ * Helper to split a TOTP code with a space — handles 6, 7, and 8 digit codes.
+ * 6-digit: "552 109"  7-digit: "552 1094"  8-digit: "5521 0942"
  */
 export function formatCode(code: string): string {
-  if (code.length !== 6) return code;
-  return `${code.slice(0, 3)} ${code.slice(3)}`;
+  if (code.length === 6) return `${code.slice(0, 3)} ${code.slice(3)}`;
+  if (code.length === 7) return `${code.slice(0, 3)} ${code.slice(3)}`;
+  if (code.length === 8) return `${code.slice(0, 4)} ${code.slice(4)}`;
+  return code;
 }
 
 /**
- * Formats code specifically with an elegant middle bullet for the Focused 2FA Card: "998 • 641"
+ * Formats code with an elegant middle bullet for the Focused 2FA Card.
+ * 6-digit: "998" • "641"   7-digit: "998" • "6410"   8-digit: "9986" • "4108"
  */
 export function formatFocusedCode(code: string): { first: string; second: string } {
-  if (code.length !== 6) return { first: '000', second: '000' };
-  return {
-    first: code.slice(0, 3),
-    second: code.slice(3)
-  };
+  if (code.length === 6) return { first: code.slice(0, 3), second: code.slice(3) };
+  if (code.length === 7) return { first: code.slice(0, 3), second: code.slice(3) };
+  if (code.length === 8) return { first: code.slice(0, 4), second: code.slice(4) };
+  // Fallback: split roughly in half
+  const mid = Math.ceil(code.length / 2);
+  return { first: code.slice(0, mid), second: code.slice(mid) };
 }
 
 /**

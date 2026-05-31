@@ -129,27 +129,96 @@ function getServiceHex(logoType: string): string {
 // ─── Brand Catalog auto-recognition ───────────────────────────────────────────
 let _brandCatalog: Array<{ title: string; slug?: string; altNames?: string[]; hex?: string }> | null = null;
 
+// Common service aliases not in the catalog JSON
+const EXTRA_ALIASES: Array<{ title: string; slug: string; altNames: string[] }> = [
+  { title: 'Gmail', slug: 'google', altNames: ['gmail', 'google mail', 'google workspace'] },
+  { title: 'YouTube', slug: 'youtube', altNames: ['youtube', 'yt'] },
+  { title: 'GitHub', slug: 'github', altNames: ['github', 'gh', 'git hub'] },
+  { title: 'Discord', slug: 'discord', altNames: ['discord'] },
+  { title: 'Slack', slug: 'slack', altNames: ['slack'] },
+  { title: 'AWS', slug: 'amazon', altNames: ['aws', 'amazon web services', 'amazon aws'] },
+  { title: 'Stripe', slug: 'stripe', altNames: ['stripe'] },
+  { title: 'Proton', slug: 'proton', altNames: ['proton', 'protonmail', 'proton mail', 'proton vpn'] },
+  { title: 'Cloudflare', slug: 'cloudflare', altNames: ['cloudflare', 'cf'] },
+  { title: 'Vercel', slug: 'vercel', altNames: ['vercel'] },
+  { title: 'Microsoft', slug: 'microsoft', altNames: ['microsoft', 'ms', 'azure', 'office 365', 'office365', 'outlook', 'hotmail', 'live'] },
+  { title: 'Apple', slug: 'apple', altNames: ['apple', 'icloud', 'apple id'] },
+  { title: 'Twitter', slug: 'twitter', altNames: ['twitter', 'x', 'x.com'] },
+  { title: 'Facebook', slug: 'facebook', altNames: ['facebook', 'fb', 'meta'] },
+  { title: 'Instagram', slug: 'instagram', altNames: ['instagram', 'ig'] },
+  { title: 'LinkedIn', slug: 'linkedin', altNames: ['linkedin'] },
+  { title: 'Dropbox', slug: 'dropbox', altNames: ['dropbox'] },
+  { title: 'Notion', slug: 'notion', altNames: ['notion'] },
+  { title: 'Figma', slug: 'figma', altNames: ['figma'] },
+  { title: 'Shopify', slug: 'shopify', altNames: ['shopify'] },
+  { title: 'Binance', slug: 'binance_exchange', altNames: ['binance'] },
+  { title: 'Coinbase', slug: 'coinbase', altNames: ['coinbase'] },
+  { title: 'GitLab', slug: 'gitlab', altNames: ['gitlab'] },
+  { title: 'Bitbucket', slug: 'bitbucket', altNames: ['bitbucket'] },
+  { title: 'Heroku', slug: 'heroku', altNames: ['heroku'] },
+  { title: 'DigitalOcean', slug: 'digitalocean', altNames: ['digitalocean', 'digital ocean', 'do'] },
+  { title: 'Netlify', slug: 'netlify', altNames: ['netlify'] },
+  { title: 'Twilio', slug: 'twilio', altNames: ['twilio'] },
+  { title: 'Bitwarden', slug: 'bitwarden', altNames: ['bitwarden'] },
+  { title: 'NPM', slug: 'npm', altNames: ['npm', 'node package manager'] },
+];
+
 async function loadBrandCatalog(): Promise<typeof _brandCatalog> {
   if (_brandCatalog) return _brandCatalog;
   try {
     const res = await fetch('/brands/_data/custom-icons.json');
     const data = await res.json();
-    _brandCatalog = data.icons || [];
+    _brandCatalog = [...EXTRA_ALIASES, ...(data.icons || [])];
   } catch {
-    _brandCatalog = [];
+    _brandCatalog = [...EXTRA_ALIASES];
   }
   return _brandCatalog;
+}
+
+/** Returns all catalog slugs that have matching SVG files (for picker browsing) */
+function searchBrandCatalog(query: string): Array<{ slug: string; title: string }> {
+  if (!_brandCatalog) return [];
+  const q = query.toLowerCase().trim();
+  if (!q) return [];
+  const results: Array<{ slug: string; title: string; score: number }> = [];
+  const seen = new Set<string>();
+  for (const entry of _brandCatalog) {
+    const slug = entry.slug || entry.title.toLowerCase().replace(/\s+/g, '_');
+    if (seen.has(slug)) continue;
+    const titleL = entry.title.toLowerCase();
+    const altL = entry.altNames?.map(a => a.toLowerCase()) ?? [];
+    let score = 0;
+    if (slug === q || titleL === q || altL.includes(q)) score = 100;
+    else if (slug.startsWith(q) || titleL.startsWith(q) || altL.some(a => a.startsWith(q))) score = 80;
+    else if (slug.includes(q) || titleL.includes(q) || altL.some(a => a.includes(q))) score = 50;
+    if (score > 0) {
+      results.push({ slug, title: entry.title, score });
+      seen.add(slug);
+    }
+  }
+  return results.sort((a, b) => b.score - a.score).slice(0, 24).map(({ slug, title }) => ({ slug, title }));
 }
 
 function matchBrandFromCatalog(input: string): { slug: string; hex?: string } | null {
   if (!input || !_brandCatalog) return null;
   const lower = input.toLowerCase();
+  // Pass 1: exact match on slug, title, or altNames (highest precision)
   for (const entry of _brandCatalog) {
-    if (entry.slug && entry.slug.toLowerCase() === lower) return { slug: entry.slug, hex: entry.hex };
-    if (entry.title.toLowerCase() === lower) return { slug: entry.slug || entry.title.toLowerCase().replace(/\s+/g, '_'), hex: entry.hex };
-    if (entry.altNames?.some(a => a.toLowerCase() === lower)) return { slug: entry.slug || entry.title.toLowerCase().replace(/\s+/g, '_'), hex: entry.hex };
-    // Partial match: if input contains title or title contains input
-    if (lower.includes(entry.title.toLowerCase()) || entry.title.toLowerCase().includes(lower)) return { slug: entry.slug || entry.title.toLowerCase().replace(/\s+/g, '_'), hex: entry.hex };
+    const slug = entry.slug || entry.title.toLowerCase().replace(/\s+/g, '_');
+    if (slug === lower) return { slug, hex: entry.hex };
+    if (entry.title.toLowerCase() === lower) return { slug, hex: entry.hex };
+    if (entry.altNames?.some(a => a.toLowerCase() === lower)) return { slug, hex: entry.hex };
+  }
+  // Pass 2: word-starts-with match (e.g. "git" → "github" but not "gmail" → "gmx")
+  for (const entry of _brandCatalog) {
+    const slug = entry.slug || entry.title.toLowerCase().replace(/\s+/g, '_');
+    if (slug.startsWith(lower) || entry.title.toLowerCase().startsWith(lower)) return { slug, hex: entry.hex };
+    if (entry.altNames?.some(a => a.toLowerCase().startsWith(lower))) return { slug, hex: entry.hex };
+  }
+  // Pass 3: substring (lowest priority — only if nothing better found)
+  for (const entry of _brandCatalog) {
+    const slug = entry.slug || entry.title.toLowerCase().replace(/\s+/g, '_');
+    if (slug.includes(lower) || entry.title.toLowerCase().includes(lower)) return { slug, hex: entry.hex };
   }
   return null;
 }
@@ -276,6 +345,9 @@ export default function App() {
   useEffect(() => { 
     if (isAccountsLoaded) {
       saveVaultData(accounts, decryptedLogKeyHex);
+      if (accounts.length > 0) {
+        setSettings(prev => ({ ...prev, lastModifiedDate: new Date().toISOString() }));
+      }
     }
   }, [accounts, isAccountsLoaded, decryptedLogKeyHex]);
   useEffect(() => { localStorage.setItem('onlyauth_settings_v3', JSON.stringify(settings)); }, [settings]);
@@ -283,6 +355,14 @@ export default function App() {
   // ── Auth state
   const isFirstRun = (!settings.authHashes || settings.authHashes.length === 0) && !settings.passphraseHash;
   const [isLocked, setIsLocked] = useState(true);
+
+  useEffect(() => {
+    if (isLocked) {
+      setIsFakeVaultActive(false);
+      setIsHiddenVaultActive(false);
+      setDecryptedLogKeyHex('');
+    }
+  }, [isLocked]);
 
   // ── Mobile Responsive & UX State Variables
   const [isMobileSearchExpanded, setIsMobileSearchExpanded] = useState<boolean>(false);
@@ -376,6 +456,9 @@ export default function App() {
   const [setupPinError, setSetupPinError] = useState('');
   const [setupPinPhase, setSetupPinPhase] = useState<'enter' | 'confirm'>('enter');
   const [showSetupKey, setShowSetupKey] = useState(false);
+  const [quizIndices, setQuizIndices] = useState<number[]>([]);
+  const [quizInputs, setQuizInputs] = useState<string[]>(['', '', '']);
+  const [quizError, setQuizError] = useState<string>('');
 
   // Unlock
   type UnlockMethod = 'passphrase' | 'pin' | 'biometrics';
@@ -565,6 +648,8 @@ export default function App() {
   
   // Icon Picker state
   const [showIconPicker, setShowIconPicker] = useState(false);
+  const [iconSearchQuery, setIconSearchQuery] = useState('');
+  const [iconSearchResults, setIconSearchResults] = useState<Array<{ slug: string; title: string }>>([]);
   const [isSettingsUnlocked, setIsSettingsUnlocked] = useState(false);
   const [pendingExportFormat, setPendingExportFormat] = useState<'purified-json' | 'plain-text' | 'html' | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -665,9 +750,9 @@ export default function App() {
   const [secondsRemaining, setSecondsRemaining] = useState(30);
   useEffect(() => {
     const interval = settings.autoRenewInterval || 30;
-    const now = Math.floor(Date.now() / 1000);
+    const now = Math.floor(Date.now() / 1000) + (settings.timeOffsetSeconds || 0);
     setSecondsRemaining(interval - (now % interval));
-  }, [tick, settings.autoRenewInterval]);
+  }, [tick, settings.autoRenewInterval, settings.timeOffsetSeconds]);
 
   // ── Batched TOTP codes from Rust backend
   const [totpCodes, setTotpCodes] = useState<Record<string, string>>({});
@@ -688,7 +773,7 @@ export default function App() {
         period: acc.period ?? 30,
         algorithm: acc.algorithm || 'SHA1',
       }));
-      const freshCodes = await generateBatchTOTP(batchPayload);
+      const freshCodes = await generateBatchTOTP(batchPayload, settings.timeOffsetSeconds || 0);
       if (isCurrent) {
         setTotpCodes(freshCodes);
         setTotpLoading(false);
@@ -847,19 +932,8 @@ export default function App() {
         setDecryptedLogKeyHex(derivedKeyHex);
         await writeAuditLog(`Vault unlocked successfully (${matchedType})`, derivedKeyHex);
 
-        // Decrypt notes of all accounts using derivedKeyHex
-        const decryptedAccounts = await Promise.all(accounts.map(async acc => {
-          if (acc.notes && acc.notes.includes(':')) {
-            try {
-              const decrypted = await decryptMetadata(acc.notes, derivedKeyHex);
-              return { ...acc, notes: decrypted };
-            } catch (e) {
-              console.error("Failed to decrypt notes for account", acc.id, e);
-              return acc;
-            }
-          }
-          return acc;
-        }));
+        // Notes are stored as plaintext — no decryption needed on unlock
+        const decryptedAccounts = accounts;
 
         safeTransition(() => {
           setAccounts(decryptedAccounts);
@@ -940,10 +1014,35 @@ export default function App() {
     const key = generateMasterKey();
     setSetupWords(words);
     setSetupMasterKey(key);
+    
+    // Pick 3 random distinct word indices
+    const indices: number[] = [];
+    while (indices.length < 3) {
+      const idx = Math.floor(Math.random() * setupWordCount);
+      if (!indices.includes(idx)) indices.push(idx);
+    }
+    indices.sort((a, b) => a - b);
+    setQuizIndices(indices);
+    setQuizInputs(['', '', '']);
+    setQuizError('');
+    setSetupSaved(false);
+    
     setSetupStep('reveal-keys');
   });
 
   const handleRevealContinue = () => safeTransition(() => {
+    // Validate verification inputs
+    const isCorrect = quizIndices.every((wordIdx, quizIdx) => {
+      const userInput = quizInputs[quizIdx].trim().toLowerCase();
+      const actualWord = setupWords[wordIdx].toLowerCase();
+      return userInput === actualWord;
+    });
+    
+    if (!isCorrect) {
+      setQuizError("Verification failed. Please check the words you wrote down.");
+      return;
+    }
+    
     setSetupStep('set-pin');
     setSetupPin('');
     setSetupPinConfirm('');
@@ -1426,7 +1525,7 @@ export default function App() {
 
   // ── Computed
   const c = settings.compactMode;
-  const visibleAccounts = accounts.filter(acc => {
+  const visibleAccounts = isFakeVaultActive ? [] : accounts.filter(acc => {
     const isHidden = acc.category.toLowerCase() === 'hide' || acc.category.toLowerCase() === 'hidden';
     return isHiddenVaultActive || !isHidden;
   });
@@ -1441,6 +1540,8 @@ export default function App() {
   const focusedCodeFormatted = formatFocusedCode(focusedCode);
   const passkeyStrength = getSecurityStrength(settings.authHashes && settings.authHashes.length > 0 ? 'fortified_passphrase_length_etc' : (settings.passphraseHash || 'default'));
   const isVaultTab = !['security', 'settings', 'support'].includes(activeTag);
+  const hasModifiedChanges = !!(settings.lastModifiedDate && settings.lastBackupDate && new Date(settings.lastModifiedDate).getTime() > new Date(settings.lastBackupDate).getTime() && accounts.length > 0);
+
 
   // ── SETUP SCREEN ─────────────────────────────────────────────────────────
   if (isFirstRun) {
@@ -1525,13 +1626,38 @@ export default function App() {
                 </button>
               </div>
 
+              {/* Mnemonic Passphrase Verification Quiz */}
+              <div className="space-y-3 p-4 bg-white/5 rounded-2xl border border-white/8 w-full text-left">
+                <p className="text-[10px] uppercase tracking-widest font-semibold text-[#00dce5]">Passphrase Backup Quiz</p>
+                <p className="text-[11px] text-[#8e90a2]">Verify you saved your passphrase. Type the corresponding words below:</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {quizIndices.map((wordIdx, quizIdx) => (
+                    <div key={wordIdx} className="space-y-1">
+                      <label className="text-[10px] text-[#8e90a2] block">Word #{wordIdx + 1}</label>
+                      <input
+                        type="text"
+                        value={quizInputs[quizIdx]}
+                        onChange={e => {
+                          const updated = [...quizInputs];
+                          updated[quizIdx] = e.target.value;
+                          setQuizInputs(updated);
+                        }}
+                        placeholder={`Word ${wordIdx + 1}`}
+                        className="w-full bg-[#0c0c0e] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-[#00dce5] transition-all font-mono"
+                      />
+                    </div>
+                  ))}
+                </div>
+                {quizError && <p className="text-[10px] font-mono text-red-400 mt-1">{quizError}</p>}
+              </div>
+
               <label className="flex items-start gap-3 cursor-pointer">
                 <input type="checkbox" checked={setupSaved} onChange={e => setSetupSaved(e.target.checked)}
                   className="mt-0.5 rounded border-white/20 text-[#00dce5] focus:ring-[#00dce5] bg-transparent" />
                 <span className="text-xs text-[#c4c5d9] leading-relaxed">I have saved my passphrase and master key in a secure offline location.</span>
               </label>
 
-              <button onClick={handleRevealContinue} disabled={!setupSaved}
+              <button onClick={handleRevealContinue} disabled={!setupSaved || quizInputs.some(w => !w.trim())}
                 className="w-full py-3 rounded-xl bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white font-semibold text-sm hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed">
                 Continue →
               </button>
@@ -1819,8 +1945,9 @@ export default function App() {
                     value={unlockInput}
                     onChange={e => setUnlockInput(e.target.value)}
                     autoFocus
+                    autoComplete="current-password"
                     placeholder="Enter your passphrase / master key"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#00dce5]/50 focus:ring-1 focus:ring-[#00dce5]/20 transition-all pr-10"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#00dce5]/50 focus:ring-2 focus:ring-[#00dce5]/25 focus:bg-white/[0.07] transition-all duration-200 pr-10"
                   />
                   <button type="button" onClick={() => setShowUnlockInput(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8e90a2] hover:text-white transition-colors">
                     {showUnlockInput ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -1835,7 +1962,7 @@ export default function App() {
                 </motion.div>
               )}
               
-              <button type="submit" className="w-full py-3 rounded-xl bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white font-semibold text-sm hover:opacity-90 transition-opacity">
+              <button type="submit" className="w-full py-3 rounded-xl bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white font-semibold text-sm hover:opacity-90 hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-200">
                 Unlock →
               </button>
             </form>
@@ -2080,7 +2207,7 @@ export default function App() {
                   onChange={e => setSearchQuery(e.target.value)}
                   placeholder="Search accounts..."
                   autoFocus
-                  className="w-full bg-white/5 border border-white/10 rounded-full py-2 pl-9 pr-4 text-xs text-white focus:outline-none focus:border-[#00dce5]/40 focus:ring-1 focus:ring-[#00dce5]/20 transition-all placeholder-[#8e90a2]"
+                  className="w-full bg-white/5 border border-white/10 rounded-full py-2 pl-9 pr-4 text-xs text-white focus:outline-none focus:border-[#00dce5]/50 focus:ring-2 focus:ring-[#00dce5]/20 focus:bg-white/[0.07] transition-all duration-200 placeholder-white/30"
                 />
               </div>
             </div>
@@ -2102,7 +2229,7 @@ export default function App() {
                   <div className="relative hidden sm:block">
                     <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8e90a2]" />
                     <input ref={searchInputRef} type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search accounts..."
-                      className="w-48 md:w-60 bg-white/5 border border-white/10 rounded-full py-2 pl-9 pr-4 text-xs text-white focus:outline-none focus:border-[#00dce5]/40 focus:ring-1 focus:ring-[#00dce5]/20 transition-all placeholder-[#8e90a2]" />
+                      className="w-48 md:w-60 bg-white/5 border border-white/10 rounded-full py-2 pl-9 pr-4 text-xs text-white focus:outline-none focus:border-[#00dce5]/50 focus:ring-2 focus:ring-[#00dce5]/20 focus:w-56 md:focus:w-72 focus:bg-white/[0.07] transition-all duration-200 placeholder-white/30" />
                   </div>
                 )}
 
@@ -2134,7 +2261,7 @@ export default function App() {
         </header>
 
         {/* Content */}
-        <div className={`flex-1 overflow-y-auto ${c ? 'p-4 md:p-6' : 'p-4 md:p-8'}`}>
+        <div className={`flex-1 overflow-y-auto ${c ? 'p-4 md:p-6' : 'p-4 md:p-8'}`} style={{ overflowX: 'visible' }}>
           <AnimatePresence mode="wait">
 
             {/* ── VAULT VIEW ─────────────────────────────────────────────── */}
@@ -2151,10 +2278,11 @@ export default function App() {
                       initial={{ opacity: 0, y: -6, scale: 0.98 }}
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: -6, scale: 0.98 }}
-                      className="border border-amber-500/40 bg-amber-950/10 rounded-2xl p-3.5 flex items-center justify-between transition-all"
+                      className="border border-amber-500/40 bg-amber-950/10 rounded-2xl p-3.5 flex items-center justify-between transition-all shadow-[0_0_20px_-6px_rgba(251,191,36,0.2)]"
                     >
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-xl bg-amber-500/15 flex items-center justify-center border border-amber-500/25">
+                        <div className="w-8 h-8 rounded-xl bg-amber-500/15 flex items-center justify-center border border-amber-500/25 relative">
+                          <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
                           <LockOpen className="w-4 h-4 text-amber-400" />
                         </div>
                         <div>
@@ -2218,7 +2346,8 @@ export default function App() {
                           <>
                             <motion.div key={focusedCode} initial={{ opacity: 0.7, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }}
                               onClick={() => handleCopyCode(focusedAccount.id, focusedCode)}
-                              className={`font-display font-bold text-white flex items-center gap-4 tracking-[0.1em] cursor-pointer hover:text-[#00dce5] transition-colors select-none ${c ? 'text-4xl md:text-5xl' : 'text-5xl md:text-6xl'}`}
+                              className={`font-mono font-bold text-white flex items-center gap-4 cursor-pointer hover:text-[#00dce5] transition-colors select-none tabular-nums ${c ? 'text-4xl md:text-5xl' : 'text-5xl md:text-6xl'}`}
+                              style={{ letterSpacing: '0.15em', textShadow: totpCodes[focusedAccount?.id ?? ''] ? '0 0 20px oklch(0.82 0.12 196 / 0.4)' : 'none' }}
                               title="Click to copy">
                               <span className={totpCodes[focusedAccount?.id ?? ''] ? '' : 'animate-pulse opacity-50'}>{focusedCodeFormatted.first}</span>
                               <span className="w-2.5 h-2.5 bg-white/20 rounded-full shrink-0" />
@@ -2277,14 +2406,18 @@ export default function App() {
                   {visibleAccounts.filter(a => a.isPinned).length > 0 && (
                     <div className="space-y-3">
                       <p className="text-[9px] uppercase tracking-[0.2em] font-bold text-[#8e90a2]">Pinned Accounts</p>
-                      <div className="flex gap-3 overflow-x-auto pb-2 no-scrollbar">
+                      <div className="relative">
+                        {/* Fade mask on the right so the 4th+ card softly disappears */}
+                        <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-16 z-10"
+                          style={{ background: 'linear-gradient(to right, transparent, #050505)' }} />
+                        <div className="flex gap-4 overflow-x-auto pb-2 no-scrollbar" style={{ paddingBottom: '12px', paddingTop: '12px' }}>
                         {visibleAccounts.filter(a => a.isPinned).map(acc => {
                           const pCode = totpCodes[acc.id] || '------';
                           const isSelected = focusedAccountId === acc.id;
                           const cardColor = acc.color || getServiceHex(acc.logoType);
                           return (
                             <div key={acc.id} onClick={() => setFocusedAccountId(acc.id)}
-                              className={`glass-panel ${c ? 'min-w-[200px] p-3' : 'min-w-[240px] p-4'} rounded-2xl flex flex-col gap-3 cursor-pointer hover:bg-white/5 transition-all shrink-0 ${
+                              className={`glass-panel ${c ? 'min-w-[200px] p-3' : 'min-w-[240px] p-4'} rounded-2xl flex flex-col gap-3 cursor-pointer transition-all duration-200 ease-out hover:bg-white/5 hover:border-white/10 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.99] shrink-0 hover:relative hover:z-20 ${
                                 isSelected ? (isHiddenVaultActive ? 'bg-amber-500/5 ring-1 ring-amber-500/20' : 'bg-white/5 ring-1 ring-white/10') : ''
                               }`}>
                               <div className="flex items-center gap-2">
@@ -2296,7 +2429,7 @@ export default function App() {
                               <div className="flex justify-between items-center">
                                 {acc.secret && acc.secret.trim() !== "" ? (
                                   <>
-                                    <span className={`font-mono font-semibold text-white ${c ? 'text-base' : 'text-xl'} ${totpCodes[acc.id] ? '' : 'animate-pulse opacity-50'}`}>{formatCode(pCode)}</span>
+                                    <span className={`font-mono font-semibold tabular-nums tracking-widest text-white ${c ? 'text-base' : 'text-xl'} ${totpCodes[acc.id] ? '' : 'animate-pulse opacity-50'}`} style={{ letterSpacing: '0.15em' }}>{formatCode(pCode)}</span>
                                     <button onClick={e => { e.stopPropagation(); handleCopyCode(acc.id, pCode); }}
                                       className="w-7 h-7 rounded-lg bg-white/5 flex items-center justify-center text-[#c4c5d9] hover:text-[#00dce5]">
                                       {copyFeedbackMap[acc.id] ? <Check className="w-3.5 h-3.5 text-[#00dce5]" /> : <Copy className="w-3 h-3" />}
@@ -2314,6 +2447,7 @@ export default function App() {
                             </div>
                           );
                         })}
+                        </div>
                       </div>
                     </div>
                   )}
@@ -2325,18 +2459,19 @@ export default function App() {
                     <p className="text-[9px] uppercase tracking-[0.2em] font-bold text-[#8e90a2]">Account List</p>
                     <span className="text-[9px] font-mono text-[#8e90a2]">{filteredAccounts.length} accounts</span>
                   </div>
-                  <div className={`grid gap-${c ? '1.5' : '3'} ${settings.accountListPlacement === 'right' ? 'grid-cols-1 max-h-[75vh] overflow-y-auto pr-0.5' : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'}`}>
+                  <div className={`grid gap-${c ? '1.5' : '3'} ${settings.accountListPlacement === 'right' ? 'grid-cols-1 max-h-[75vh] overflow-y-auto overflow-x-visible pr-0.5' : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'}`}
+                    style={{ paddingTop: '8px', paddingBottom: '8px', paddingLeft: '16px', paddingRight: '16px' }}>
                     {filteredAccounts.length > 0 ? filteredAccounts.map(acc => {
                       const isFocused = focusedAccountId === acc.id;
                       const aCode = totpCodes[acc.id] || '------';
                       const cardColor = acc.color || getServiceHex(acc.logoType);
                       return (
                         <motion.div key={acc.id} onClick={() => setFocusedAccountId(acc.id)}
-                          whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} transition={{ duration: 0.1, ease: "easeOut" }}
-                          className={`glass-panel ${c ? 'rounded-xl p-2.5' : 'rounded-2xl p-4'} flex items-center justify-between cursor-pointer transition-all duration-150 ease-out group ${
+                          whileHover={{ scale: 1.005, y: -1 }} whileTap={{ scale: 0.99 }} transition={{ duration: 0.15, ease: "easeOut" }}
+                          className={`glass-panel ${c ? 'rounded-xl p-2.5' : 'rounded-2xl p-4'} flex items-center justify-between cursor-pointer transition-all duration-200 ease-out group border border-transparent hover:relative hover:z-20 ${
                             isFocused
                               ? `${isHiddenVaultActive ? 'bg-amber-500/5 ring-1 ring-amber-500/20' : 'bg-white/5 ring-1 ring-white/10'}`
-                              : `hover:bg-white/5`
+                              : `hover:bg-white/[0.06] hover:border-white/10 hover:shadow-lg`
                           }`}>
                           <div className="flex items-center gap-3 min-w-0 flex-1">
                             <div className="shrink-0">
@@ -2357,7 +2492,7 @@ export default function App() {
                           </div>
                           {acc.secret && acc.secret.trim() !== "" ? (
                             <div className="code-hover-target ml-3 shrink-0" onClick={e => { e.stopPropagation(); handleCopyCode(acc.id, aCode); }}>
-                              <span className={`original-code font-mono font-semibold text-white group-hover:text-[#00dce5] transition-colors ${c ? 'text-xs' : 'text-sm'} ${totpCodes[acc.id] ? '' : 'animate-pulse opacity-50'}`}>{formatCode(aCode)}</span>
+                              <span className={`original-code font-mono font-semibold tabular-nums tracking-widest text-white group-hover:text-[#00dce5] transition-colors ${c ? 'text-xs' : 'text-sm'} ${totpCodes[acc.id] ? '' : 'animate-pulse opacity-50'}`} style={{ letterSpacing: '0.12em' }}>{formatCode(aCode)}</span>
                               <span className="hover-text text-[9px] text-[#00dce5] font-bold font-sans uppercase">
                                 {copyFeedbackMap[acc.id] ? '✓' : 'COPY'}
                               </span>
@@ -2699,7 +2834,7 @@ export default function App() {
 
                 {settingsSubTab === 'layout' && (
                   <div className="glass-panel rounded-2xl p-6 border border-white/8 space-y-5">
-                    <h3 className="font-display text-base font-semibold text-white">Layout</h3>
+                    <h3 className="text-[10px] uppercase tracking-widest font-semibold text-zinc-500">Layout</h3>
 
                     {/* Compact mode */}
                     <div className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/8">
@@ -2711,6 +2846,61 @@ export default function App() {
                         className={`relative w-10 h-6 rounded-full transition-colors ${settings.compactMode ? 'bg-[#00dce5]' : 'bg-white/10'}`}>
                         <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${settings.compactMode ? 'left-5' : 'left-1'}`} />
                       </button>
+                    </div>
+
+                    {/* Clock-Drift Calibration */}
+                    <div className="space-y-3 p-4 bg-white/5 rounded-xl border border-white/8 text-left">
+                      <div>
+                        <p className="text-sm font-semibold text-white">Clock-Drift Calibration</p>
+                        <p className="text-xs text-[#8e90a2] mt-0.5">TOTP requires perfectly synced system clocks. Calibrate your clock offset if 2FA codes are failing.</p>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <input
+                          type="range"
+                          min="-300"
+                          max="300"
+                          value={settings.timeOffsetSeconds || 0}
+                          onChange={e => setSettings(prev => ({ ...prev, timeOffsetSeconds: parseInt(e.target.value) }))}
+                          className="flex-1 accent-[#00dce5] h-1 bg-white/10 rounded-lg appearance-none cursor-pointer"
+                        />
+                        <span className="text-xs font-mono text-white min-w-[50px] text-right">
+                          {(settings.timeOffsetSeconds || 0) > 0 ? `+${settings.timeOffsetSeconds}` : settings.timeOffsetSeconds}s
+                        </span>
+                      </div>
+                      <div className="flex gap-2">
+                        {[-60, -30, 0, 30, 60].map(val => (
+                          <button
+                            key={val}
+                            onClick={() => setSettings(prev => ({ ...prev, timeOffsetSeconds: val }))}
+                            className={`px-3 py-1 rounded-lg text-[10px] font-mono border transition-all ${
+                              settings.timeOffsetSeconds === val
+                                ? 'bg-[#00dce5]/10 border-[#00dce5] text-[#00dce5]'
+                                : 'bg-white/5 border-white/10 text-[#8e90a2] hover:text-white'
+                            }`}
+                          >
+                            {val > 0 ? `+${val}` : val}s
+                          </button>
+                        ))}
+                        <button
+                          onClick={async () => {
+                            try {
+                              const start = Date.now();
+                              const res = await fetch('https://worldtimeapi.org/api/timezone/Etc/UTC');
+                              const data = await res.json();
+                              const serverTime = Math.floor(new Date(data.utc_datetime).getTime() / 1000);
+                              const clientTime = Math.floor(start / 1000);
+                              const offset = serverTime - clientTime;
+                              setSettings(prev => ({ ...prev, timeOffsetSeconds: offset }));
+                              showToast(`Clock Drift Synced. Calculated Offset: ${offset}s`, 'success');
+                            } catch {
+                              showToast('Failed to sync time online. Using manual calibration.', 'error');
+                            }
+                          }}
+                          className="px-3 py-1 ml-auto bg-[#00dce5] text-black font-semibold rounded-lg text-[10px] hover:opacity-90 transition-all"
+                        >
+                          Auto Sync
+                        </button>
+                      </div>
                     </div>
 
                     {/* Force Search on Startup */}
@@ -2743,7 +2933,7 @@ export default function App() {
 
                 {settingsSubTab === 'profile' && (
                   <div className="glass-panel rounded-2xl p-6 border border-white/8 space-y-6">
-                    <h3 className="font-display text-base font-semibold text-white">Profile & Perks</h3>
+                    <h3 className="text-[10px] uppercase tracking-widest font-semibold text-zinc-500">Profile & Perks</h3>
 
                     <div className="space-y-4">
                       {/* Name input */}
@@ -2843,7 +3033,7 @@ export default function App() {
 
                 {settingsSubTab === 'passphrase' && (
                   <div className="glass-panel rounded-2xl p-6 border border-white/8 space-y-5">
-                    <h3 className="font-display text-base font-semibold text-white">Change Passphrase</h3>
+                    <h3 className="text-[10px] uppercase tracking-widest font-semibold text-zinc-500">Change Passphrase</h3>
                     <p className="text-xs text-[#8e90a2]">Generate a new recovery passphrase or rotate master key. Verification of current passphrase required.</p>
 
                     {newPassphraseWords.length === 0 ? (
@@ -2958,7 +3148,7 @@ export default function App() {
                 {settingsSubTab === 'import-export' && (
                   <div className="glass-panel rounded-2xl p-6 border border-white/8 space-y-6">
                     <div>
-                      <h3 className="font-display text-base font-semibold text-white">Import & Export</h3>
+                      <h3 className="text-[10px] uppercase tracking-widest font-semibold text-zinc-500">Import & Export</h3>
                       <p className="text-xs text-[#8e90a2] mt-0.5">Import credentials from other vaults, or download your Only Auth backup file.</p>
                     </div>
 
@@ -3140,7 +3330,7 @@ export default function App() {
 
                 {settingsSubTab === 'hardware' && (
                   <div className="glass-panel rounded-2xl p-6 border border-white/8 space-y-5">
-                    <h3 className="font-display text-base font-semibold text-white">Hardware Settings</h3>
+                    <h3 className="text-[10px] uppercase tracking-widest font-semibold text-zinc-500">Hardware Settings</h3>
                     <p className="text-xs text-[#8e90a2]">Manage hardware keys registered in the security overview tab.</p>
                     <div className="space-y-2.5">
                       {settings.securityKeys.map(k => (
@@ -3160,7 +3350,7 @@ export default function App() {
 
                 {settingsSubTab === 'app-lock' && (
                   <div className="glass-panel rounded-2xl p-6 border border-white/8 space-y-5">
-                    <h3 className="font-display text-base font-semibold text-white">App Lock Settings</h3>
+                    <h3 className="text-[10px] uppercase tracking-widest font-semibold text-zinc-500">App Lock Settings</h3>
                     
                     <div className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/8">
                       <div>
@@ -3311,33 +3501,78 @@ export default function App() {
                 </div>
                 <span className="text-[10px] uppercase font-bold text-[#8e90a2] mt-2">Select Brand Icon</span>
 
-                {/* Brand icons selection popover */}
+                {/* Brand icons selection popover — searchable full library */}
                 {showIconPicker && (
-                  <div className="absolute top-24 z-20 w-64 bg-[#1c1b1b] border border-white/10 rounded-2xl p-3 shadow-2xl grid grid-cols-4 gap-2 animate-fade-in">
-                    {([
-                      { id: 'custom', name: 'Generic' },
-                      { id: 'google', name: 'Google' },
-                      { id: 'aws', name: 'AWS' },
-                      { id: 'github', name: 'GitHub' },
-                      { id: 'discord', name: 'Discord' },
-                      { id: 'slack', name: 'Slack' },
-                      { id: 'proton', name: 'Proton' },
-                      { id: 'stripe', name: 'Stripe' }
-                    ] as const).map(b => (
-                      <button key={b.id} type="button"
-                        onClick={() => {
-                          setFormLogoType(b.id);
-                          setShowIconPicker(false);
+                  <div className="absolute top-24 z-20 w-72 bg-[#161616] border border-white/10 rounded-2xl shadow-2xl animate-fade-in flex flex-col" style={{ maxHeight: '340px' }}>
+                    {/* Search header */}
+                    <div className="p-3 border-b border-white/8 flex items-center gap-2">
+                      <Search className="w-3.5 h-3.5 text-[#8e90a2] shrink-0" />
+                      <input
+                        type="text"
+                        autoFocus
+                        placeholder="Search 490+ icons..."
+                        value={iconSearchQuery}
+                        onChange={e => {
+                          const q = e.target.value;
+                          setIconSearchQuery(q);
+                          setIconSearchResults(searchBrandCatalog(q));
                         }}
-                        className={`flex flex-col items-center gap-1 p-2 rounded-xl border transition-all hover:bg-white/5 ${
-                          formLogoType === b.id ? 'border-[#00dce5] bg-[#00dce5]/5' : 'border-transparent'
-                        }`}>
-                        <div className="w-8 h-8 flex items-center justify-center rounded-lg">
-                          <BrandLogo name="AB" logoType={b.id} className="w-6 h-6 text-[10px]" />
+                        className="flex-1 bg-transparent text-xs text-white placeholder-[#8e90a2] focus:outline-none"
+                      />
+                      {iconSearchQuery && (
+                        <button type="button" onClick={() => { setIconSearchQuery(''); setIconSearchResults([]); }}
+                          className="text-[#8e90a2] hover:text-white transition-colors">
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Results grid */}
+                    <div className="overflow-y-auto p-2 flex-1">
+                      {iconSearchQuery.trim() === '' ? (
+                        // Default quick-picks when no search
+                        <>
+                          <p className="text-[9px] uppercase tracking-widest text-[#8e90a2] px-1 pb-1.5">Quick picks</p>
+                          <div className="grid grid-cols-5 gap-1.5">
+                            {(['custom','google','github','discord','slack','proton','stripe','amazon','microsoft','cloudflare','vercel','apple','twitter','facebook','notion'] as const).map(id => (
+                              <button key={id} type="button"
+                                onClick={() => { setFormLogoType(id); setShowIconPicker(false); setIconSearchQuery(''); }}
+                                className={`flex flex-col items-center gap-1 p-1.5 rounded-xl border transition-all hover:bg-white/5 ${
+                                  formLogoType === id ? 'border-[#00dce5]/60 bg-[#00dce5]/5' : 'border-transparent'
+                                }`}>
+                                <div className="w-8 h-8 flex items-center justify-center rounded-lg">
+                                  <BrandLogo name={id} logoType={id} className="w-6 h-6 text-[9px]" />
+                                </div>
+                                <span className="text-[7px] text-[#c4c5d9] font-medium truncate w-full text-center capitalize">{id}</span>
+                              </button>
+                            ))}
+                          </div>
+                          <p className="text-[9px] text-[#8e90a2] px-1 pt-2 pb-0.5">Type to search all 490+ icons</p>
+                        </>
+                      ) : iconSearchResults.length === 0 ? (
+                        <div className="py-6 text-center">
+                          <p className="text-xs text-[#8e90a2]">No icons found for &ldquo;{iconSearchQuery}&rdquo;</p>
+                          <button type="button" onClick={() => { setFormLogoType('custom'); setShowIconPicker(false); setIconSearchQuery(''); }}
+                            className="mt-2 text-[10px] text-[#00dce5] hover:underline">Use generic icon</button>
                         </div>
-                        <span className="text-[8px] text-[#c4c5d9] font-medium truncate w-full text-center">{b.name}</span>
-                      </button>
-                    ))}
+                      ) : (
+                        <div className="grid grid-cols-5 gap-1.5">
+                          {iconSearchResults.map(({ slug, title }) => (
+                            <button key={slug} type="button"
+                              onClick={() => { setFormLogoType(slug); setShowIconPicker(false); setIconSearchQuery(''); }}
+                              title={title}
+                              className={`flex flex-col items-center gap-1 p-1.5 rounded-xl border transition-all hover:bg-white/5 ${
+                                formLogoType === slug ? 'border-[#00dce5]/60 bg-[#00dce5]/5' : 'border-transparent'
+                              }`}>
+                              <div className="w-8 h-8 flex items-center justify-center rounded-lg">
+                                <BrandLogo name={title} logoType={slug} className="w-6 h-6 text-[9px]" />
+                              </div>
+                              <span className="text-[7px] text-[#c4c5d9] font-medium truncate w-full text-center">{title}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

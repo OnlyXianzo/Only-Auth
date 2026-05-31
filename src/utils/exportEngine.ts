@@ -122,6 +122,28 @@ export function exportPurifiedJSON(accounts: Account[], settings: Partial<AppSet
   return JSON.stringify(payload, null, 2);
 }
 
+export function exportCSV(accounts: Account[]): string {
+  const headers = ['id', 'name', 'email', 'secret', 'notes', 'category', 'isPinned', 'logoType', 'digits', 'period', 'algorithm'];
+  const csvRows = [headers.join(',')];
+  for (const acc of accounts) {
+    const values = [
+      acc.id,
+      `"${(acc.name || '').replace(/"/g, '""')}"`,
+      `"${(acc.email || '').replace(/"/g, '""')}"`,
+      acc.secret,
+      `"${(acc.notes || '').replace(/"/g, '""')}"`,
+      acc.category,
+      acc.isPinned ? 'true' : 'false',
+      acc.logoType,
+      acc.digits || 6,
+      acc.period || 30,
+      acc.algorithm || 'SHA1'
+    ];
+    csvRows.push(values.join(','));
+  }
+  return csvRows.join('\n');
+}
+
 export function exportPlainTextURI(accounts: Account[]): string {
   return accounts
     .filter(a => a.secret?.trim())

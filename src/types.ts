@@ -31,6 +31,8 @@ export interface AppSettings {
   autoRenewInterval: number;
   accountListPlacement: 'right' | 'bottom';
   lastBackupDate: string;
+  lastModifiedDate?: string;     // tracks last time accounts list was modified
+  timeOffsetSeconds?: number;    // Clock-drift calibration offset in seconds
   customTags: string[];         // user-defined tags shown in sidebar
   securityKeys: Array<{ id: string; name: string; keyType: string; addedAt: string }>;
   compactMode: boolean;
@@ -49,5 +51,6 @@ export interface AppSettings {
   instantLockOnBlur?: boolean;
   screenshotProtection?: boolean;
 }
+
 
 

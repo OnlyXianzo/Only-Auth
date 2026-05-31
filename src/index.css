@@ -6,38 +6,65 @@
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
   --font-display: "Geist", "Inter", ui-sans-serif, sans-serif;
 
-  /* New Design System Colors */
-  --color-accent: #00dce5;
-  --color-primary: #b8c3ff;
-  --color-primary-action: #2d5bff;
-  --color-secondary: #d0bcff;
+  /* ── Accent & Brand ───────────────────────────────── */
+  /* Cyan accent — primary interactive highlight        */
+  --color-accent:          oklch(0.82 0.12 196);
+  /* Indigo primary — labels, highlights                */
+  --color-primary:         oklch(0.75 0.15 263);
+  /* Deep indigo — CTA buttons                         */
+  --color-primary-action:  oklch(0.52 0.22 263);
+  /* Soft violet — secondary labels                    */
+  --color-secondary:       oklch(0.80 0.11 300);
 
-  /* Surfaces */
-  --color-surface: #131313;
-  --color-surface-dim: #0e0e0e;
-  --color-surface-low: #1c1b1b;
-  --color-surface-container: #201f1f;
-  --color-surface-high: #2a2a2a;
-  --color-surface-highest: #353534;
+  /* ── Semantic States ──────────────────────────────── */
+  --color-error:           oklch(0.65 0.18 22);
+  --color-success:         oklch(0.72 0.14 142);
+  --color-warning:         oklch(0.78 0.14 72);
 
-  /* Text */
-  --color-on-surface: #e5e2e1;
-  --color-on-surface-variant: #c4c5d9;
+  /* ── Surfaces — warm-tinted dark stagger ─────────── */
+  /* Base canvas                                       */
+  --color-surface:         oklch(0.13 0.005 264);
+  /* Deepest layer — behind starfield                  */
+  --color-surface-dim:     oklch(0.10 0.005 264);
+  /* Slightly raised                                   */
+  --color-surface-low:     oklch(0.17 0.006 264);
+  /* Card base                                         */
+  --color-surface-container: oklch(0.19 0.007 264);
+  /* Elevated card                                     */
+  --color-surface-high:    oklch(0.23 0.008 264);
+  /* Topmost surface                                   */
+  --color-surface-highest: oklch(0.28 0.009 264);
 
-  /* Borders */
-  --color-outline: #8e90a2;
-  --color-outline-variant: #434656;
+  /* ── Text — warm-tinted, never pure white ─────────── */
+  --color-on-surface:         oklch(0.92 0.005 264);
+  --color-on-surface-variant: oklch(0.75 0.012 264);
+
+  /* ── Borders ──────────────────────────────────────── */
+  --color-outline:         oklch(0.58 0.015 264);
+  --color-outline-variant: oklch(0.33 0.012 264);
+}
+
+/* ── Base reset ───────────────────────────────────────── */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Global focus ring — cyan, 2px, offset */
+:focus-visible {
+  outline: 2px solid oklch(0.82 0.12 196);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 
 body {
-  background-color: #131313;
-  color: #e5e2e1;
+  background-color: #050505;
+  color: oklch(0.92 0.005 264);
   font-family: var(--font-sans);
   overflow-x: hidden;
   height: 100vh;
 }
 
-/* Glass Panel — matches code.html spec */
+/* ── Glass Panel — matches code.html spec ─────────────── */
 .glass-panel {
   background-color: rgba(19, 19, 19, 0.4);
   backdrop-filter: blur(32px);
@@ -60,12 +87,64 @@ body {
   box-shadow: 0 10px 40px -15px rgba(0, 0, 0, 0.85);
 }
 
-/* Progress bar — cyan with glow */
+/* ── Card Spotlight — border that illuminates on hover ─── */
+/*
+   Pure CSS approach: the ::before pseudo overlays a radial gradient
+   that tracks the card's "center" on hover, simulating a spotlight
+   sweeping the border. Works without JavaScript.
+*/
+.card-spotlight {
+  position: relative;
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+.card-spotlight::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: radial-gradient(
+    400px circle at 50% 0%,
+    oklch(0.82 0.12 196 / 0.35),
+    transparent 70%
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+.card-spotlight:hover::before {
+  opacity: 1;
+}
+
+/* ── Grain overlay ────────────────────────────────────── */
+/*
+   SVG feTurbulence noise rendered as a fixed overlay.
+   opacity 0.035 keeps it subtle — just enough to break
+   the flat, screen-burned look on dark surfaces.
+*/
+.grain {
+  position: fixed;
+  pointer-events: none;
+  inset: 0;
+  z-index: 9999;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 200px 200px;
+}
+
+/* ── Progress bar — cyan with glow ───────────────────── */
 .progress-bar-inner {
   transition: width 1s linear, background-color 0.5s ease;
 }
 
-/* Scrollbar — minimal white */
+/* ── Scrollbar — minimal white ────────────────────────── */
 ::-webkit-scrollbar {
   width: 4px;
   height: 4px;
@@ -81,12 +160,12 @@ body {
   background: rgba(255, 255, 255, 0.12);
 }
 
-/* Starfield canvas */
+/* ── Starfield canvas ─────────────────────────────────── */
 #starfield-canvas {
-  background-color: #131313;
+  background-color: #050505;
 }
 
-/* Hidden scrollbar utility */
+/* ── Hidden scrollbar utility ─────────────────────────── */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
@@ -95,13 +174,13 @@ body {
   scrollbar-width: none;
 }
 
-/* Mobile drawer backdrop */
+/* ── Mobile drawer backdrop ───────────────────────────── */
 .drawer-backdrop {
   background: rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(4px);
 }
 
-/* Card background blur effect */
+/* ── Card background blur effect ─────────────────────── */
 .card-bg-blur {
   position: absolute;
   inset: 0;
@@ -115,7 +194,7 @@ body {
   opacity: 0.3;
 }
 
-/* Code hover copy interaction */
+/* ── Code hover copy interaction ─────────────────────── */
 .code-hover-target {
   position: relative;
   display: inline-block;
@@ -142,12 +221,12 @@ body {
   opacity: 1;
 }
 
-/* Focus-card transition */
+/* ── Focus-card transition ────────────────────────────── */
 .focus-card-transition {
   transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Animate fade in */
+/* ── Animate fade in (existing) ───────────────────────── */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -156,7 +235,22 @@ body {
   animation: fadeIn 0.35s ease both;
 }
 
-/* Scale hover micro-interaction */
+/* ── Staggered entry animation ────────────────────────── */
+@keyframes slide-up-fade {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-enter {
+  animation: slide-up-fade 0.35s ease-out forwards;
+}
+
+/* ── Scale hover micro-interaction ───────────────────── */
 .scale-hover {
   transition: transform 0.15s ease;
 }
@@ -164,7 +258,59 @@ body {
   transform: scale(1.05);
 }
 
-/* Word grid for passphrase reveal */
+/* ── Button press state ───────────────────────────────── */
+.btn-press {
+  transition: all 200ms ease-out;
+}
+.btn-press:hover {
+  transform: translateY(-1px);
+}
+.btn-press:active {
+  transform: scale(0.97) translateY(0);
+}
+
+/* ── Tabular nums — for TOTP code displays ────────────── */
+.font-tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+  letter-spacing: 0.04em;
+}
+
+/* ── Progress ring — SVG circular TOTP timer ──────────── */
+/*
+   Usage in JSX:
+     <svg class="ring-progress" viewBox="0 0 36 36" style="--pct: 0.72">
+       <circle class="ring-progress__track" cx="18" cy="18" r="15.9"/>
+       <circle class="ring-progress__fill"  cx="18" cy="18" r="15.9"/>
+     </svg>
+*/
+.ring-progress {
+  transform: rotate(-90deg);          /* start stroke at 12 o'clock      */
+  overflow: visible;
+}
+.ring-progress__track {
+  fill: none;
+  stroke: oklch(0.28 0.009 264);      /* matches --color-surface-highest  */
+  stroke-width: 2.5;
+}
+.ring-progress__fill {
+  fill: none;
+  stroke: oklch(0.82 0.12 196);       /* --color-accent cyan              */
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-dasharray: 100;
+  stroke-dashoffset: calc(100 - var(--pct, 1) * 100);
+  transition: stroke-dashoffset 1s linear, stroke 0.4s ease;
+}
+/* Warning state: accent shifts toward amber as time runs low */
+.ring-progress__fill[data-warn="true"] {
+  stroke: oklch(0.78 0.14 72);        /* --color-warning                  */
+}
+.ring-progress__fill[data-danger="true"] {
+  stroke: oklch(0.65 0.18 22);        /* --color-error                    */
+}
+
+/* ── Word grid for passphrase reveal ──────────────────── */
 .word-cell {
   background: rgba(255,255,255,0.04);
   border: 1px solid rgba(255,255,255,0.08);
@@ -172,19 +318,19 @@ body {
   padding: 0.5rem 0.75rem;
   font-family: var(--font-mono);
   font-size: 0.75rem;
-  color: #e5e2e1;
+  color: oklch(0.92 0.005 264);
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
 .word-cell .word-index {
-  color: #00dce5;
+  color: oklch(0.82 0.12 196);
   font-size: 0.65rem;
   font-weight: 600;
   min-width: 1.25rem;
 }
 
-/* Prevent mobile centering of user avatar menu on viewports < 480px */
+/* ── Prevent mobile centering of avatar menu < 480px ─── */
 @media (max-width: 480px) {
   .mobile-avatar-left {
     display: flex !important;
