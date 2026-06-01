@@ -300,6 +300,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoLockTimeout: 300,
   instantLockOnBlur: false,
   screenshotProtection: true,
+  appThemeAccent: 'cyan',
 };
 
 // Helper for Bitwarden URI parsing
@@ -481,6 +482,54 @@ export default function App() {
   const [biometricsSupported, setBiometricsSupported] = useState(false);
   const [showVisualKeypad, setShowVisualKeypad] = useState(false);
   const [isMobileScreen, setIsMobileScreen] = useState(false);
+
+  const accent = settings.appThemeAccent || 'cyan';
+  const accentHex = {
+    cyan: '#00dce5',
+    amber: '#f59e0b',
+    emerald: '#10b981',
+    purple: '#8b5cf6',
+    crimson: '#e11d48'
+  }[accent] || '#00dce5';
+
+  const accentText = {
+    cyan: 'text-[#00dce5]',
+    amber: 'text-amber-500',
+    emerald: 'text-emerald-500',
+    purple: 'text-purple-500',
+    crimson: 'text-rose-500'
+  }[accent] || 'text-[#00dce5]';
+
+  const accentBg = {
+    cyan: 'bg-[#00dce5]',
+    amber: 'bg-amber-500',
+    emerald: 'bg-emerald-500',
+    purple: 'bg-purple-500',
+    crimson: 'bg-rose-500'
+  }[accent] || 'bg-[#00dce5]';
+
+  const accentBorder = {
+    cyan: 'border-[#00dce5]',
+    amber: 'border-amber-500',
+    emerald: 'border-emerald-500',
+    purple: 'border-purple-500',
+    crimson: 'border-rose-500'
+  }[accent] || 'border-[#00dce5]';
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const themes = {
+      cyan: { hex: '#00dce5', rgb: '0, 220, 229' },
+      amber: { hex: '#f59e0b', rgb: '245, 158, 11' },
+      emerald: { hex: '#10b981', rgb: '16, 185, 129' },
+      purple: { hex: '#8b5cf6', rgb: '139, 92, 246' },
+      crimson: { hex: '#e11d48', rgb: '225, 29, 72' }
+    };
+    const t = themes[accent] || themes.cyan;
+    root.style.setProperty('--color-accent', t.hex);
+    root.style.setProperty('--color-accent-rgb', t.rgb);
+    root.style.setProperty('--theme-accent', t.hex);
+  }, [accent]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -1895,7 +1944,7 @@ export default function App() {
               onClick={() => setShowVisualKeypad(prev => !prev)}
               className={`absolute bottom-4 left-4 p-2 rounded-xl transition-all duration-200 z-30 ${
                 showVisualKeypad 
-                  ? 'bg-[#00dce5]/10 border border-[#00dce5]/30 text-[#00dce5]' 
+                  ? `${accentBg}/10 border ${accentBorder}/30 ${accentText}` 
                   : 'bg-white/5 border border-white/10 text-[#8e90a2] hover:text-white hover:bg-white/10'
               }`}
               title="Toggle Numeric Keypad"
@@ -1969,8 +2018,8 @@ export default function App() {
                           initial={{ scale: 0.8 }}
                           animate={{
                             scale: isFilled ? 1.1 : 1,
-                            backgroundColor: isFilled ? 'rgba(0, 220, 229, 1)' : 'rgba(255,255,255,0.08)',
-                            borderColor: isFilled ? 'rgba(0, 220, 229, 1)' : 'rgba(255,255,255,0.15)',
+                            backgroundColor: isFilled ? accentHex : 'rgba(255,255,255,0.08)',
+                            borderColor: isFilled ? accentHex : 'rgba(255,255,255,0.15)',
                           }}
                           transition={{ duration: 0.15, ease: 'easeOut' }}
                           className={`w-3.5 h-3.5 rounded-full border-2 transition-all duration-200 ${
@@ -3005,12 +3054,57 @@ export default function App() {
                       <div className="grid grid-cols-2 gap-3">
                         {(['right', 'bottom'] as const).map(pos => (
                           <button key={pos} onClick={() => setSettings(prev => ({ ...prev, accountListPlacement: pos }))}
-                            className={`p-4 rounded-xl border text-left transition-all ${settings.accountListPlacement === pos ? 'border-[#00dce5]/50 bg-[#00dce5]/5 text-white' : 'border-white/10 bg-white/5 text-[#8e90a2] hover:text-white'}`}>
+                            className={`p-4 rounded-xl border text-left transition-all ${settings.accountListPlacement === pos ? `${accentBorder}/50 ${accentBg}/5 text-white` : 'border-white/10 bg-white/5 text-[#8e90a2] hover:text-white'}`}>
                             <div className="font-semibold text-xs uppercase mb-1">{pos === 'right' ? 'Right Sidebar' : 'Below Card'}</div>
                             <div className="text-[10px] text-[#8e90a2]">{pos === 'right' ? 'Side-by-side on wide screens' : 'Stacked layout with wider grid'}</div>
                           </button>
                         ))}
                       </div>
+                    </div>
+
+                    {/* Select App Theme Accent */}
+                    <div className="space-y-2 border-t border-white/8 pt-4">
+                      <label className="text-[10px] uppercase tracking-wider font-semibold text-[#8e90a2]">App Theme Accent</label>
+                      <div className="grid grid-cols-5 gap-2">
+                        {([
+                          { id: 'cyan', label: 'Cyan', bg: 'bg-[#00dce5]' },
+                          { id: 'amber', label: 'Amber', bg: 'bg-amber-500' },
+                          { id: 'emerald', label: 'Emerald', bg: 'bg-emerald-500' },
+                          { id: 'purple', label: 'Purple', bg: 'bg-purple-500' },
+                          { id: 'crimson', label: 'Crimson', bg: 'bg-rose-500' }
+                        ] as const).map(theme => {
+                          const isSelected = (settings.appThemeAccent || 'cyan') === theme.id;
+                          return (
+                            <button key={theme.id} type="button" onClick={() => setSettings(prev => ({ ...prev, appThemeAccent: theme.id }))}
+                              className={`p-2.5 rounded-xl border text-center transition-all flex flex-col items-center gap-1.5 hover:scale-105 active:scale-95 duration-150 ${
+                                isSelected ? 'border-white/40 bg-white/5 text-white' : 'border-white/10 bg-white/0 text-[#8e90a2] hover:text-white'
+                              }`}
+                              title={theme.label}
+                            >
+                              <div className={`w-3.5 h-3.5 rounded-full ${theme.bg}`} />
+                              <span className="text-[9px] font-semibold">{theme.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Auto-Lock Timeout Dropdown */}
+                    <div className="space-y-2 border-t border-white/8 pt-4">
+                      <label className="text-[10px] uppercase tracking-wider font-semibold text-[#8e90a2]">Auto-Lock Timeout</label>
+                      <select
+                        value={settings.autoLockTimeout ?? 300}
+                        onChange={e => setSettings(prev => ({ ...prev, autoLockTimeout: parseInt(e.target.value) }))}
+                        className={`w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-white/30 transition-all font-semibold`}
+                      >
+                        <option value={30} className="bg-[#111] text-white">30 Seconds</option>
+                        <option value={60} className="bg-[#111] text-white">1 Minute</option>
+                        <option value={300} className="bg-[#111] text-white">5 Minutes</option>
+                        <option value={900} className="bg-[#111] text-white">15 Minutes</option>
+                        <option value={1800} className="bg-[#111] text-white">30 Minutes</option>
+                        <option value={3600} className="bg-[#111] text-white">1 Hour</option>
+                        <option value={0} className="bg-[#111] text-white">Never Lock</option>
+                      </select>
                     </div>
                   </div>
                 )}

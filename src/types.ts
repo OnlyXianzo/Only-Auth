@@ -51,6 +51,7 @@ export interface AppSettings {
   instantLockOnBlur?: boolean;
   screenshotProtection?: boolean;
   pinLength?: number;
+  appThemeAccent?: 'cyan' | 'amber' | 'emerald' | 'purple' | 'crimson';
 }
 
 
