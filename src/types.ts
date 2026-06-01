@@ -50,6 +50,7 @@ export interface AppSettings {
   autoLockTimeout?: number;
   instantLockOnBlur?: boolean;
   screenshotProtection?: boolean;
+  pinLength?: number;
 }
 
 

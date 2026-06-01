@@ -288,6 +288,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   appLockEnabled: true,
   appLockMethod: 'passphrase',
   pinAttempts: 0,
+  pinLength: 0,
   forceSearchOnStartup: false,
   devAccountName: 'Dev Account',
   devAccountTag: 'Premium',
@@ -940,11 +941,16 @@ export default function App() {
           setIsLocked(false);
           setUnlockError('');
           setUnlockInput('');
-          setSettings(prev => ({ 
-            ...prev, 
-            ...upgradedSettings, 
-            pinAttempts: 0 
-          }));
+          setSettings(prev => {
+            const updates: Partial<AppSettings> = { ...upgradedSettings, pinAttempts: 0 };
+            if (matchedType === 'pin' && matchedHash && prev.pinHash !== matchedHash) {
+              updates.pinHash = matchedHash;
+            }
+            return {
+              ...prev,
+              ...updates
+            };
+          });
         });
       }
       isVerifyingRef.current = false;
@@ -962,11 +968,29 @@ export default function App() {
       await writeAuditLog(`Failed ${method} unlock attempt. Count: ${nextAttempts}`, undefined);
 
       safeTransition(() => {
-        setSettings(prev => ({ ...prev, pinAttempts: nextAttempts }));
         if (method === 'pin' && nextAttempts >= 5) {
-          setUnlockError('PIN locked out due to 5 failed attempts. Master passphrase required.');
+          const oldPinHash = settings.pinHash;
+          let nextHashes = [...(settings.authHashes || [])];
+          let nextMetadata = { ...(settings.authMetadata || {}) };
+          if (oldPinHash) {
+            nextHashes = nextHashes.filter(h => h !== oldPinHash);
+            delete nextMetadata[oldPinHash];
+          }
+
+          setSettings(prev => ({
+            ...prev,
+            pinHash: '',
+            pinLength: 0,
+            pinAttempts: nextAttempts,
+            authHashes: nextHashes,
+            authMetadata: nextMetadata,
+            appLockEnabled: false
+          }));
+
+          setUnlockError('PIN destroyed and locked out due to 5 failed attempts. Master passphrase required.');
           setUnlockMethod('passphrase');
         } else {
+          setSettings(prev => ({ ...prev, pinAttempts: nextAttempts }));
           setUnlockError(`Incorrect ${method}. Attempt ${nextAttempts}.`);
         }
         setUnlockInput('');
@@ -988,13 +1012,13 @@ export default function App() {
 
   // ── PIN auto-submission
   useEffect(() => {
-    if (isLocked && unlockMethod === 'pin' && unlockInput.length === 4) {
+    if (isLocked && unlockMethod === 'pin' && unlockInput.length === (settings.pinLength || 4)) {
       const triggerUnlock = async () => {
         await verifyAndUnlock(unlockInput, 'pin');
       };
       triggerUnlock();
     }
-  }, [unlockInput, unlockMethod, isLocked, settings.authHashes, settings.pinHash, settings.duressPinHash]);
+  }, [unlockInput, unlockMethod, isLocked, settings.authHashes, settings.pinHash, settings.duressPinHash, settings.pinLength]);
 
   // ── Recurrent Gratitude Micro-Animation
   useEffect(() => {
@@ -1069,10 +1093,12 @@ export default function App() {
       [masterKeyCred.hash]: masterKeyCred.encMeta
     };
 
+    let setupPinHash = '';
     if (!skipPin && setupPin.trim().length >= 4) {
       const pinCred = await createAuthCredential(setupPin.trim(), 'pin');
       hashes.push(pinCred.hash);
       metadata[pinCred.hash] = pinCred.encMeta;
+      setupPinHash = pinCred.hash;
     }
 
     const derivedKeyHex = await sha256(phrase + "OnlyAuthAuditLogSalt2026");
@@ -1086,7 +1112,8 @@ export default function App() {
         authMetadata: metadata,
         passphraseHash: '', // Clear legacy hashes
         masterKeyHash: '',
-        pinHash: '',
+        pinHash: setupPinHash,
+        pinLength: skipPin ? 0 : setupPin.trim().length,
         pinAttempts: 0 
       }));
       setIsLocked(false);
@@ -1231,14 +1258,35 @@ export default function App() {
             showToast('Passphrase updated. Use your new passphrase to unlock.', 'success');
           });
         } else if (pendingAction?.type === 'update-pin') {
-          sha256(pendingAction.data.newPin + "OnlyAuthAuditLogSalt2026").then(async newKeyHex => {
+          const newPin = pendingAction.data.newPin;
+          sha256(newPin + "OnlyAuthAuditLogSalt2026").then(async newKeyHex => {
             await saveVaultData(accounts, newKeyHex);
             setDecryptedLogKeyHex(newKeyHex);
-            const newHash = await sha256(pendingAction.data.newPin);
-            setSettings(prev => ({ ...prev, pinHash: newHash, pinAttempts: 0 }));
-            setNewPinField('');
-            setNewPinConfirm('');
-            showToast('PIN updated successfully.', 'success');
+            
+            try {
+              const pinCred = await createAuthCredential(newPin, 'pin');
+              const oldPinHash = settings.pinHash;
+              const currentHashes = (settings.authHashes || []).filter(h => h !== oldPinHash);
+              const currentMetadata = { ...settings.authMetadata };
+              if (oldPinHash) {
+                delete currentMetadata[oldPinHash];
+              }
+
+              setSettings(prev => ({
+                ...prev,
+                authHashes: [...currentHashes, pinCred.hash],
+                authMetadata: { ...currentMetadata, [pinCred.hash]: pinCred.encMeta },
+                pinHash: pinCred.hash,
+                pinLength: newPin.length,
+                pinAttempts: 0
+              }));
+              
+              setNewPinField('');
+              setNewPinConfirm('');
+              showToast('PIN updated successfully.', 'success');
+            } catch {
+              showToast('Failed to compute secure PIN hash.', 'error');
+            }
           });
         } else if (pendingAction?.type === 'update-masterkey') {
           sha256(pendingAction.data.newKey + "OnlyAuthAuditLogSalt2026").then(async newKeyHex => {
@@ -1872,19 +1920,19 @@ export default function App() {
                     ref={pinInputRef}
                     type="password"
                     pattern="\d*"
-                    maxLength={4}
+                    maxLength={settings.pinLength || 4}
                     value={unlockInput}
                     onChange={e => {
-                      const val = e.target.value.replace(/\D/g, '').substring(0, 4);
+                      const val = e.target.value.replace(/\D/g, '').substring(0, settings.pinLength || 4);
                       setUnlockInput(val);
                     }}
                     autoFocus
                     className="absolute inset-0 opacity-0 cursor-default z-10 w-full h-8"
                     placeholder="PIN"
                   />
-                  {/* 4 Circles Display */}
+                  {/* Circles Display */}
                   <div onClick={() => pinInputRef.current?.focus()} className="flex gap-4 py-2 cursor-pointer relative z-20">
-                    {Array.from({ length: 4 }).map((_, idx) => {
+                    {Array.from({ length: settings.pinLength || 4 }).map((_, idx) => {
                       const isFilled = unlockInput.length > idx;
                       return (
                         <motion.div
@@ -1909,7 +1957,7 @@ export default function App() {
                     {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
                       <button key={num} type="button"
                         onClick={() => {
-                          if (unlockInput.length < 4) {
+                          if (unlockInput.length < (settings.pinLength || 4)) {
                             setUnlockInput(prev => prev + num);
                           }
                         }}
@@ -1924,7 +1972,7 @@ export default function App() {
                     </button>
                     <button type="button"
                       onClick={() => {
-                        if (unlockInput.length < 4) {
+                        if (unlockInput.length < (settings.pinLength || 4)) {
                           setUnlockInput(prev => prev + '0');
                         }
                       }}
@@ -3375,7 +3423,13 @@ export default function App() {
                             const isSelected = settings.appLockMethod === option.id;
                             return (
                               <button key={option.id}
-                                onClick={() => setSettings(prev => ({ ...prev, appLockMethod: option.id }))}
+                                onClick={() => {
+                                  if (option.id === 'pin' && !settings.pinHash) {
+                                    showToast('Please set up a PIN in the section below first.', 'error');
+                                    return;
+                                  }
+                                  setSettings(prev => ({ ...prev, appLockMethod: option.id }));
+                                }}
                                 className={`w-full p-4 rounded-xl border text-left transition-all flex items-center justify-between ${
                                   isSelected ? 'border-[#00dce5]/50 bg-[#00dce5]/5 text-white' : 'border-white/10 bg-white/5 text-[#8e90a2] hover:text-white'
                                 }`}>
