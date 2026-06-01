@@ -1,6 +1,6 @@
 [[permission]]
-identifier = "allow-all-commands"
-description = "Allows invoking all custom commands in the main binary"
+identifier = "allow-app-commands"
+description = "Allows invoking our application's specific Rust commands"
 commands.allow = [
   "validate_base32",
   "generate_secret",

@@ -110,11 +110,12 @@ export async function loadVaultData(): Promise<Account[]> {
     try {
       return await invoke<Account[]>('load_vault_data');
     } catch (e) {
-      console.warn('Tauri load_vault_data failed, trying localStorage fallback:', e);
+      console.error('Tauri load_vault_data failed:', e);
+      return [];
     }
   }
 
-  // Browser fallback: read from localStorage
+  // Browser fallback: ONLY read from localStorage in mock browser environment (non-Tauri)
   try {
     const saved = localStorage.getItem('onlyauth_accounts_v3');
     if (saved) {
@@ -142,24 +143,26 @@ export async function saveVaultData(accounts: Account[], keyHex?: string): Promi
       }))
     : accounts;
 
-  // Always sync with localStorage for additional safety and web mode support
-  try {
-    localStorage.setItem('onlyauth_accounts_v3', JSON.stringify(accountsToSave));
-  } catch (e) {
-    console.error('Failed to save mock accounts to localStorage:', e);
-  }
-
   const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
   if (isTauri) {
     try {
       await invoke('save_vault_data', { accounts: accountsToSave });
+      // In Tauri mode, we do NOT save to localStorage to prevent plaintext secret exposure at rest
       return true;
     } catch (e) {
       console.error('Failed to save vault data to Rust backend:', e);
       return false;
     }
   }
-  return true;
+
+  // Browser fallback: ONLY save to localStorage in mock browser environment (non-Tauri)
+  try {
+    localStorage.setItem('onlyauth_accounts_v3', JSON.stringify(accountsToSave));
+    return true;
+  } catch (e) {
+    console.error('Failed to save mock accounts to localStorage:', e);
+    return false;
+  }
 }
 
 /**
@@ -407,19 +410,48 @@ export async function setWindowScreenshotProtection(protect: boolean): Promise<v
   }
 }
 
+async function deriveAesKey(keyMaterial: string): Promise<CryptoKey> {
+  const encoder = new TextEncoder();
+  const rawKey = encoder.encode(keyMaterial);
+  const hashedKey = await crypto.subtle.digest('SHA-256', rawKey);
+  return await crypto.subtle.importKey(
+    'raw',
+    hashedKey,
+    { name: 'AES-GCM' },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
 export async function encryptMetadata(data: string, keyMaterial: string): Promise<string> {
   const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
   if (isTauri) {
     try {
       return await invoke<string>('encrypt_metadata', { data, keyMaterial });
     } catch (e) {
-      console.error('Tauri encrypt_metadata failed, using mock fallback:', e);
+      console.error('Tauri encrypt_metadata failed, using fallback:', e);
     }
   }
-  // Browser mock fallback: simple base64 with simulated key check tag
-  const hashedKey = await localSha256(keyMaterial);
-  const base64Data = btoa(unescape(encodeURIComponent(data)));
-  return `${hashedKey.slice(0, 8)}:${base64Data}`;
+  // Cryptographically secure Web Crypto fallback (AES-256-GCM)
+  try {
+    const key = await deriveAesKey(keyMaterial);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encoder = new TextEncoder();
+    const encodedData = encoder.encode(data);
+    const ciphertext = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv },
+      key,
+      encodedData
+    );
+    
+    // Format: hex_iv:hex_ciphertext
+    const ivHex = Array.from(iv).map(b => b.toString(16).padStart(2, '0')).join('');
+    const cipherHex = Array.from(new Uint8Array(ciphertext)).map(b => b.toString(16).padStart(2, '0')).join('');
+    return `${ivHex}:${cipherHex}`;
+  } catch (e) {
+    console.error('Web Crypto fallback encryption failed:', e);
+    throw new Error('Encryption failed');
+  }
 }
 
 export async function decryptMetadata(encrypted: string, keyMaterial: string): Promise<string> {
@@ -428,19 +460,31 @@ export async function decryptMetadata(encrypted: string, keyMaterial: string): P
     try {
       return await invoke<string>('decrypt_metadata', { encrypted, keyMaterial });
     } catch (e) {
-      console.error('Tauri decrypt_metadata failed, using mock fallback:', e);
+      console.error('Tauri decrypt_metadata failed, using fallback:', e);
     }
   }
-  // Browser mock fallback decryption
-  const parts = encrypted.split(':');
-  if (parts.length !== 2) {
-    throw new Error('Invalid encrypted metadata format');
+  // Cryptographically secure Web Crypto fallback decryption (AES-256-GCM)
+  try {
+    const parts = encrypted.split(':');
+    if (parts.length !== 2) {
+      throw new Error('Invalid encrypted metadata format');
+    }
+    const ivHex = parts[0];
+    const cipherHex = parts[1];
+    
+    const iv = new Uint8Array(ivHex.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16)));
+    const ciphertext = new Uint8Array(cipherHex.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16)));
+    
+    const key = await deriveAesKey(keyMaterial);
+    const decrypted = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv },
+      key,
+      ciphertext
+    );
+    const decoder = new TextDecoder();
+    return decoder.decode(decrypted);
+  } catch (e) {
+    console.error('Web Crypto fallback decryption failed:', e);
+    throw new Error('Failed to decrypt metadata: key mismatch or corrupted data');
   }
-  const keyTag = parts[0];
-  const base64Data = parts[1];
-  const hashedKey = await localSha256(keyMaterial);
-  if (keyTag !== hashedKey.slice(0, 8)) {
-    throw new Error('Failed to decrypt metadata: key mismatch');
-  }
-  return decodeURIComponent(escape(atob(base64Data)));
 }

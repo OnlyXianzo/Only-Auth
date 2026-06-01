@@ -6,6 +6,6 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "allow-all-commands"
+    "allow-app-commands"
   ]
 }
