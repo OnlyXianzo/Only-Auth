@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use zeroize::Zeroize;
-use hmac::{Hmac, Mac};
 use sha2::{Sha256, Digest};
 use subtle::ConstantTimeEq;
 use aes_gcm::{
@@ -15,7 +14,7 @@ use argon2::{
     Argon2, Params
 };
 
-type HmacSha256 = Hmac<Sha256>;
+
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -128,13 +127,27 @@ pub fn argon2id_verify(hash: String, password: String) -> Result<bool, String> {
 
 #[tauri::command]
 pub fn secure_compare(a: String, b: String) -> bool {
-    if a.len() != b.len() {
-        // Dummy comparison to mitigate basic timing attack on length mismatch
-        let _ = a.as_bytes().ct_eq(a.as_bytes());
-        false
-    } else {
-        bool::from(a.as_bytes().ct_eq(b.as_bytes()))
-    }
+    // Pad both inputs to equal length to avoid leaking string lengths via timing.
+    // The constant-time comparison runs over the padded buffers regardless of
+    // whether the original lengths matched, so an attacker cannot infer the
+    // length of the secret from response latency.
+    let max_len = a.len().max(b.len()).max(1);
+    let mut buf_a = vec![0u8; max_len];
+    let mut buf_b = vec![0u8; max_len];
+    buf_a[..a.len()].copy_from_slice(a.as_bytes());
+    buf_b[..b.len()].copy_from_slice(b.as_bytes());
+
+    // Length equality is folded into the constant-time comparison by XOR'ing
+    // a flag byte into the first position so mismatched lengths always fail.
+    let len_match: u8 = if a.len() == b.len() { 0 } else { 0xFF };
+    buf_a[0] ^= len_match;
+
+    let result = bool::from(buf_a.ct_eq(&buf_b));
+
+    buf_a.zeroize();
+    buf_b.zeroize();
+
+    result
 }
 
 #[tauri::command]
@@ -146,7 +159,7 @@ pub fn encrypt_backup(data: String, password: String) -> Result<String, String> 
     rand::thread_rng().fill_bytes(&mut salt);
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
 
-    // 2. Derive key from password using Argon2id
+    // 2. Derive 32-byte AES key from password using Argon2id
     let params = Params::new(131072, 3, 4, None).map_err(|e| e.to_string())?;
     let argon2 = Argon2::new(
         argon2::Algorithm::Argon2id,
@@ -154,33 +167,24 @@ pub fn encrypt_backup(data: String, password: String) -> Result<String, String> 
         params,
     );
     
-    // Request 64 bytes of output: 32 bytes for AES key, 32 bytes for HMAC key
-    let mut key_material = [0u8; 64];
+    let mut key_material = [0u8; 32];
     argon2.hash_password_into(password.as_bytes(), &salt, &mut key_material)
         .map_err(|e| e.to_string())?;
-        
-    let aes_key = &key_material[0..32];
-    let hmac_key = &key_material[32..64];
 
-    // 3. Encrypt data with AES-256-GCM
-    let cipher = Aes256Gcm::new_from_slice(aes_key).map_err(|e| e.to_string())?;
+    // 3. Encrypt data with AES-256-GCM (AEAD — provides both confidentiality and integrity)
+    let cipher = Aes256Gcm::new_from_slice(&key_material).map_err(|e| e.to_string())?;
     let nonce = Nonce::from_slice(&nonce_bytes);
     let ciphertext = cipher.encrypt(nonce, data.as_bytes()).map_err(|e| e.to_string())?;
 
-    // 4. Compute HMAC-SHA256 signature (Integrity Seal) over salt + nonce + ciphertext
-    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(hmac_key).map_err(|e| e.to_string())?;
-    mac.update(&salt);
-    mac.update(&nonce_bytes);
-    mac.update(&ciphertext);
-    let hmac_result = mac.finalize().into_bytes();
+    // 4. Scrub key material from memory
+    key_material.zeroize();
 
-    // 5. Format payload: SALT_HEX:NONCE_HEX:CIPHERTEXT_HEX:HMAC_HEX
+    // 5. Format payload: SALT_HEX:NONCE_HEX:CIPHERTEXT_HEX
     let payload = format!(
-        "{}:{}:{}:{}",
+        "{}:{}:{}",
         data_encoding::HEXLOWER.encode(&salt),
         data_encoding::HEXLOWER.encode(&nonce_bytes),
         data_encoding::HEXLOWER.encode(&ciphertext),
-        data_encoding::HEXLOWER.encode(&hmac_result)
     );
 
     Ok(payload)
@@ -188,17 +192,17 @@ pub fn encrypt_backup(data: String, password: String) -> Result<String, String> 
 
 #[tauri::command]
 pub fn decrypt_backup(payload: String, password: String) -> Result<String, String> {
+    // Support both legacy 4-part (SALT:NONCE:CT:HMAC) and new 3-part (SALT:NONCE:CT) formats
     let parts: Vec<&str> = payload.split(':').collect();
-    if parts.len() != 4 {
+    if parts.len() != 3 && parts.len() != 4 {
         return Err("Invalid backup payload format".to_string());
     }
 
     let salt = data_encoding::HEXLOWER.decode(parts[0].as_bytes()).map_err(|e| e.to_string())?;
     let nonce_bytes = data_encoding::HEXLOWER.decode(parts[1].as_bytes()).map_err(|e| e.to_string())?;
     let ciphertext = data_encoding::HEXLOWER.decode(parts[2].as_bytes()).map_err(|e| e.to_string())?;
-    let provided_hmac = data_encoding::HEXLOWER.decode(parts[3].as_bytes()).map_err(|e| e.to_string())?;
 
-    // 2. Derive key from password using Argon2id
+    // Derive 32-byte AES key from password using Argon2id
     let params = Params::new(131072, 3, 4, None).map_err(|e| e.to_string())?;
     let argon2 = Argon2::new(
         argon2::Algorithm::Argon2id,
@@ -206,28 +210,18 @@ pub fn decrypt_backup(payload: String, password: String) -> Result<String, Strin
         params,
     );
     
-    let mut key_material = [0u8; 64];
+    let mut key_material = [0u8; 32];
     argon2.hash_password_into(password.as_bytes(), &salt, &mut key_material)
         .map_err(|e| e.to_string())?;
-        
-    let aes_key = &key_material[0..32];
-    let hmac_key = &key_material[32..64];
 
-    // 3. Compute and verify HMAC signature in constant time
-    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(hmac_key).map_err(|e| e.to_string())?;
-    mac.update(&salt);
-    mac.update(&nonce_bytes);
-    mac.update(&ciphertext);
-    let computed_hmac = mac.finalize().into_bytes();
-
-    if !bool::from(computed_hmac.ct_eq(&provided_hmac)) {
-        return Err("Integrity seal verification failed. The backup has been tampered with or incorrect password.".to_string());
-    }
-
-    // 4. Decrypt ciphertext
-    let cipher = Aes256Gcm::new_from_slice(aes_key).map_err(|e| e.to_string())?;
+    // Decrypt ciphertext — AES-256-GCM verifies integrity via its authentication tag
+    let cipher = Aes256Gcm::new_from_slice(&key_material).map_err(|e| e.to_string())?;
     let nonce = Nonce::from_slice(&nonce_bytes);
-    let decrypted_bytes = cipher.decrypt(nonce, ciphertext.as_slice()).map_err(|e| e.to_string())?;
+    let decrypted_bytes = cipher.decrypt(nonce, ciphertext.as_slice())
+        .map_err(|_| "Decryption failed. The backup has been tampered with or incorrect password.".to_string())?;
+
+    // Scrub key material from memory
+    key_material.zeroize();
 
     let decrypted_str = String::from_utf8(decrypted_bytes).map_err(|e| e.to_string())?;
     Ok(decrypted_str)
@@ -306,7 +300,7 @@ pub fn encrypt_metadata(data: String, key_material: String) -> Result<String, St
     // Derive 32-byte key from key_material using SHA-256
     let mut hasher = Sha256::new();
     hasher.update(key_material.as_bytes());
-    let key_bytes = hasher.finalize();
+    let mut key_bytes = hasher.finalize();
 
     let cipher = Aes256Gcm::new_from_slice(&key_bytes).map_err(|e| e.to_string())?;
 
@@ -315,6 +309,9 @@ pub fn encrypt_metadata(data: String, key_material: String) -> Result<String, St
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     let ciphertext = cipher.encrypt(nonce, data.as_bytes()).map_err(|e| e.to_string())?;
+
+    // Scrub derived key from memory
+    key_bytes.zeroize();
 
     let payload = format!(
         "{}:{}",
@@ -337,12 +334,16 @@ pub fn decrypt_metadata(encrypted: String, key_material: String) -> Result<Strin
     // Derive 32-byte key from key_material using SHA-256
     let mut hasher = Sha256::new();
     hasher.update(key_material.as_bytes());
-    let key_bytes = hasher.finalize();
+    let mut key_bytes = hasher.finalize();
 
     let cipher = Aes256Gcm::new_from_slice(&key_bytes).map_err(|e| e.to_string())?;
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     let decrypted_bytes = cipher.decrypt(nonce, ciphertext.as_slice()).map_err(|e| e.to_string())?;
+
+    // Scrub derived key from memory
+    key_bytes.zeroize();
+
     let decrypted_str = String::from_utf8(decrypted_bytes).map_err(|e| e.to_string())?;
     Ok(decrypted_str)
 }
@@ -351,6 +352,7 @@ pub fn decrypt_metadata(encrypted: String, key_material: String) -> Result<Strin
 mod tests {
     use super::*;
     use sha1::Sha1;
+    use hmac::{Hmac, Mac};
     type HmacSha1 = Hmac<Sha1>;
 
     #[test]
