@@ -76,14 +76,8 @@ pub async fn generate_totp_batch(accounts: Vec<AccountInput>, time_offset: Optio
                 
                 match TOTP::new(algorithm, digits, 1, period, secret_bytes) {
                     Ok(totp) => {
-                        match totp.generate_at(adjusted_time) {
-                            Ok(code) => {
-                                results.insert(account.id, code);
-                            }
-                            Err(_) => {
-                                results.insert(account.id, "------".to_string());
-                            }
-                        }
+                        let code = totp.generate(adjusted_time);
+                        results.insert(account.id, code);
                     }
                     Err(_) => {
                         results.insert(account.id, "------".to_string());
