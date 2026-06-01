@@ -2426,6 +2426,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "only-auth"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "argon2",
+ "data-encoding",
+ "hmac",
+ "rand 0.8.6",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "subtle",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+ "totp-rs",
+ "zeroize",
+]
+
+[[package]]
 name = "opaque-debug"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3597,27 +3618,6 @@ dependencies = [
  "webview2-com",
  "window-vibrancy",
  "windows",
-]
-
-[[package]]
-name = "tauri-app"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "argon2",
- "data-encoding",
- "hmac",
- "rand 0.8.6",
- "serde",
- "serde_json",
- "sha1",
- "sha2",
- "subtle",
- "tauri",
- "tauri-build",
- "tauri-plugin-opener",
- "totp-rs",
- "zeroize",
 ]
 
 [[package]]
