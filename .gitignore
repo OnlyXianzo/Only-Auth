@@ -23,3 +23,10 @@ public/brands/icons_svg/
 CLAUDE.md
 ruvector.db
 GEMINI.md
+*.bak
+.gemini/
+.opencode/
+graphify-out/
+system-prompt-antigravity.md
+system-prompt-gemini.md
+system-prompt-opencode.md
