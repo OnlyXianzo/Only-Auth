@@ -361,7 +361,7 @@ export function generateQR(text: string, moduleSize: number = 3): string {
 
   // Place format info
   const formatBits = FORMAT_INFO[bestMask];
-  const fmtFn = (i: number) => (formatBits >> (14 - i)) & 1;
+  const fmtFn = (i: number) => (formatBits >> (14 - (i % 15))) & 1;
   const fmtCoords: [number, number][] = [
     [0,8],[1,8],[2,8],[3,8],[4,8],[5,8],[7,8],[8,8],[8,7],[8,5],[8,4],[8,3],[8,2],[8,1],[8,0],
     [8,size-1],[8,size-2],[8,size-3],[8,size-4],[8,size-5],[8,size-6],[8,size-7],[size-8,8],
