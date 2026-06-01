@@ -3,7 +3,7 @@ import {
   Lock, Shield, Search, Plus, LockOpen, Briefcase,
   Edit3, Copy, Trash2, Pin, Check, X, ShieldCheck,
   Settings as SettingsIcon, RefreshCw, LogOut, AlertTriangle,
-  Fingerprint, Download, Upload, Info, Camera, Layers, Key,
+  Fingerprint, Download, Upload, Info, Camera, Layers, Key, Keyboard,
   ChevronRight, Mail, Eye, EyeOff, Menu, ZoomIn, ZoomOut,
   HelpCircle, Tag
 } from 'lucide-react';
@@ -479,6 +479,17 @@ export default function App() {
   const [unlockError, setUnlockError] = useState('');
   const [showUnlockInput, setShowUnlockInput] = useState(false);
   const [biometricsSupported, setBiometricsSupported] = useState(false);
+  const [showVisualKeypad, setShowVisualKeypad] = useState(false);
+  const [isMobileScreen, setIsMobileScreen] = useState(false);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobileScreen(window.innerWidth < 640);
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Check biometrics support
   useEffect(() => {
@@ -1874,15 +1885,33 @@ export default function App() {
       <div className="relative min-h-screen w-full flex items-center justify-center select-none text-[#e5e2e1] overflow-hidden">
         <StarfieldBackground speed={0.2} />
         <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
-          className="w-full max-w-sm mx-4 glass-panel rounded-3xl p-8 flex flex-col items-center gap-6 relative overflow-hidden z-10">
+          className="w-full max-w-sm mx-4 glass-panel rounded-3xl p-8 pb-10 flex flex-col items-center gap-6 relative overflow-hidden z-10">
           <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-[#2d5bff] to-transparent" />
+
+          {/* Floating Keypad Toggle Button for Tablet/Desktop */}
+          {unlockMethod === 'pin' && !isMobileScreen && (
+            <button
+              type="button"
+              onClick={() => setShowVisualKeypad(prev => !prev)}
+              className={`absolute bottom-4 left-4 p-2 rounded-xl transition-all duration-200 z-30 ${
+                showVisualKeypad 
+                  ? 'bg-[#00dce5]/10 border border-[#00dce5]/30 text-[#00dce5]' 
+                  : 'bg-white/5 border border-white/10 text-[#8e90a2] hover:text-white hover:bg-white/10'
+              }`}
+              title="Toggle Numeric Keypad"
+            >
+              <Keyboard className="w-4 h-4" />
+            </button>
+          )}
 
           <div className="w-16 h-16 rounded-2xl bg-[#2d5bff]/10 border border-[#2d5bff]/30 flex items-center justify-center">
             <Lock className="w-7 h-7 text-[#b8c3ff]" />
           </div>
           <div className="text-center">
             <h1 className="font-display text-2xl font-semibold text-white">Unlock Vault</h1>
-            <p className="text-sm text-[#c4c5d9] mt-1">Only Auth</p>
+            <p className="text-sm text-[#c4c5d9] mt-1">
+              {unlockMethod === 'pin' ? 'Enter Your Pin' : 'Only Auth'}
+            </p>
           </div>
 
           {/* Method tabs - only visible if App Lock is enabled and NOT locked out */}
@@ -1894,7 +1923,7 @@ export default function App() {
                 return (
                   <button key={method} type="button" onClick={() => { setUnlockMethod(method); setUnlockError(''); setUnlockInput(''); }}
                     className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all capitalize ${unlockMethod === method ? 'bg-white/10 text-white' : 'text-[#8e90a2] hover:text-white'}`}>
-                    {method === 'biometrics' ? '⬡ Bio' : 'PIN'}
+                    {method === 'biometrics' ? '⬡ Bio' : 'Keypad'}
                   </button>
                 );
               })}
@@ -1953,38 +1982,45 @@ export default function App() {
                   </div>
                   
                   {/* Visual Numeric Keypad for Touch/Mobile */}
-                  <div className="grid grid-cols-3 gap-3 w-full max-w-[220px] mx-auto mt-2 relative z-20">
-                    {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
-                      <button key={num} type="button"
+                  {(isMobileScreen || showVisualKeypad) && (
+                    <motion.div 
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      className="grid grid-cols-3 gap-3 w-full max-w-[220px] mx-auto mt-2 relative z-20 overflow-hidden"
+                    >
+                      {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
+                        <button key={num} type="button"
+                          onClick={() => {
+                            if (unlockInput.length < (settings.pinLength || 4)) {
+                              setUnlockInput(prev => prev + num);
+                            }
+                          }}
+                          className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-base font-semibold text-white flex items-center justify-center mx-auto">
+                          {num}
+                        </button>
+                      ))}
+                      <button type="button"
+                        onClick={() => setUnlockInput('')}
+                        className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-[9px] font-bold text-[#8e90a2] hover:text-white flex items-center justify-center mx-auto">
+                        CLEAR
+                      </button>
+                      <button type="button"
                         onClick={() => {
                           if (unlockInput.length < (settings.pinLength || 4)) {
-                            setUnlockInput(prev => prev + num);
+                            setUnlockInput(prev => prev + '0');
                           }
                         }}
                         className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-base font-semibold text-white flex items-center justify-center mx-auto">
-                        {num}
+                        0
                       </button>
-                    ))}
-                    <button type="button"
-                      onClick={() => setUnlockInput('')}
-                      className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-[9px] font-bold text-[#8e90a2] hover:text-white flex items-center justify-center mx-auto">
-                      CLEAR
-                    </button>
-                    <button type="button"
-                      onClick={() => {
-                        if (unlockInput.length < (settings.pinLength || 4)) {
-                          setUnlockInput(prev => prev + '0');
-                        }
-                      }}
-                      className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-base font-semibold text-white flex items-center justify-center mx-auto">
-                      0
-                    </button>
-                    <button type="button"
-                      onClick={() => setUnlockInput(prev => prev.slice(0, -1))}
-                      className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-xs font-bold text-[#8e90a2] hover:text-white flex items-center justify-center mx-auto">
-                      ⌫
-                    </button>
-                  </div>
+                      <button type="button"
+                        onClick={() => setUnlockInput(prev => prev.slice(0, -1))}
+                        className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-xs font-bold text-[#8e90a2] hover:text-white flex items-center justify-center mx-auto">
+                        ⌫
+                      </button>
+                    </motion.div>
+                  )}
                 </div>
               ) : (
                 <div className="relative w-full">
