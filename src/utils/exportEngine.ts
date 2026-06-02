@@ -272,7 +272,7 @@ export function parseSealedPayload(json: string): { accounts: Account[]; setting
     createdAt: (a.createdAt as string) || new Date().toISOString(),
     digits: (a.digits as number) ?? 6,
     period: (a.period as number) ?? 30,
-    algorithm: (a.algorithm as string) || 'SHA1',
+    algorithm: (a.algorithm as 'SHA1' | 'SHA256' | 'SHA512') || 'SHA1',
     nextRotationDate: a.nextRotationDate as string | undefined,
   }));
 
