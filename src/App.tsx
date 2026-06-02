@@ -1182,7 +1182,7 @@ export default function App() {
             const encMeta = settings.authMetadata?.[hash];
             if (encMeta) {
               try {
-                const keyMaterial = await sha256(input + "OnlyAuthMetadataDerivationSalt2026");
+                const keyMaterial = await sha256(`${input}OnlyAuthMetadataDerivationSalt2026`);
                 const decrypted = await decryptMetadata(encMeta, keyMaterial);
                 const meta = JSON.parse(decrypted);
                 matchedType = meta.type;
@@ -1263,7 +1263,7 @@ export default function App() {
             }
           });
         } else {
-          const derivedKeyHex = await sha256(input + "OnlyAuthAuditLogSalt2026");
+          const derivedKeyHex = await sha256(`${input}OnlyAuthAuditLogSalt2026`);
           setDecryptedLogKeyHex(derivedKeyHex);
           await writeAuditLog(`Vault unlocked successfully (${matchedType})`, derivedKeyHex);
 
@@ -1431,7 +1431,7 @@ export default function App() {
         setupPinHash = pinCred.hash;
       }
 
-      const derivedKeyHex = await sha256(phrase + "OnlyAuthAuditLogSalt2026");
+      const derivedKeyHex = await sha256(`${phrase}OnlyAuthAuditLogSalt2026`);
       setDecryptedLogKeyHex(derivedKeyHex);
       await writeAuditLog('Vault setup completed with hardened Argon2id KDF', derivedKeyHex);
 
@@ -2174,9 +2174,9 @@ export default function App() {
                     onClick={() => {
                       const hidden = document.querySelector<HTMLInputElement>('#setup-pin-hidden');
                       if (setupPinPhase === 'enter' && setupPin.length < 8) {
-                        setSetupPin(prev => prev + num);
+                        setSetupPin(prev => `${prev}${num}`);
                       } else if (setupPinPhase === 'confirm' && setupPinConfirm.length < setupPin.length) {
-                        setSetupPinConfirm(prev => prev + num);
+                        setSetupPinConfirm(prev => `${prev}${num}`);
                       }
                       hidden?.focus();
                     }}
@@ -2199,9 +2199,9 @@ export default function App() {
                   onClick={() => {
                     const hidden = document.querySelector<HTMLInputElement>('#setup-pin-hidden');
                     if (setupPinPhase === 'enter' && setupPin.length < 8) {
-                      setSetupPin(prev => prev + '0');
+                      setSetupPin(prev => `${prev}0`);
                     } else if (setupPinPhase === 'confirm' && setupPinConfirm.length < setupPin.length) {
-                      setSetupPinConfirm(prev => prev + '0');
+                      setSetupPinConfirm(prev => `${prev}0`);
                     }
                     hidden?.focus();
                   }}
