@@ -98,16 +98,7 @@ function createAccountId(): string {
 }
 
 function stripCredentialHashes(settings: Partial<AppSettings>): Partial<AppSettings> {
-  const {
-    passphraseHash,
-    masterKeyHash,
-    pinHash,
-    authHashes,
-    authMetadata,
-    duressPinHash,
-    duressPassphraseHash,
-    ...clean
-  } = settings;
+  const { passphraseHash, masterKeyHash, pinHash, authHashes, authMetadata, duressPinHash, duressPassphraseHash, ...clean } = settings;
   return clean;
 }
 
@@ -259,21 +250,21 @@ export function buildSealedPayload(accounts: Account[], settings: Partial<AppSet
 export function parseSealedPayload(json: string): { accounts: Account[]; settings: Partial<AppSettings> } {
   const parsed = JSON.parse(json) as { accounts?: Record<string, unknown>[]; settings?: Partial<AppSettings> };
   const accounts = (parsed.accounts || []).map((a) => ({
-    id: (a.id as string) || createAccountId(),
-    name: (a.name as string) || 'Imported',
-    email: (a.email as string) || '',
-    secret: ((a.secret as string) || '').toUpperCase(),
-    notes: (a.notes as string) || '',
-    category: (a.category as string) || 'personal',
+    id: (typeof a.id === 'string' ? a.id : undefined) || createAccountId(),
+    name: (typeof a.name === 'string' ? a.name : undefined) || 'Imported',
+    email: (typeof a.email === 'string' ? a.email : undefined) || '',
+    secret: (typeof a.secret === 'string' ? a.secret : '').toUpperCase(),
+    notes: (typeof a.notes === 'string' ? a.notes : undefined) || '',
+    category: (typeof a.category === 'string' ? a.category : undefined) || 'personal',
     isPinned: Boolean(a.isPinned),
-    logoType: (a.logoType as Account['logoType']) || 'custom',
-    color: a.color as string | undefined,
-    tags: (a.tags as string[]) || [],
-    createdAt: (a.createdAt as string) || new Date().toISOString(),
-    digits: (a.digits as number) ?? 6,
-    period: (a.period as number) ?? 30,
-    algorithm: (a.algorithm as 'SHA1' | 'SHA256' | 'SHA512') || 'SHA1',
-    nextRotationDate: a.nextRotationDate as string | undefined,
+    logoType: (typeof a.logoType === 'string' ? a.logoType as Account['logoType'] : undefined) || 'custom',
+    color: typeof a.color === 'string' ? a.color : undefined,
+    tags: Array.isArray(a.tags) ? (a.tags as string[]) : [],
+    createdAt: (typeof a.createdAt === 'string' ? a.createdAt : undefined) || new Date().toISOString(),
+    digits: (typeof a.digits === 'number' ? a.digits : undefined) ?? 6,
+    period: (typeof a.period === 'number' ? a.period : undefined) ?? 30,
+    algorithm: (typeof a.algorithm === 'string' ? a.algorithm as 'SHA1' | 'SHA256' | 'SHA512' : undefined) || 'SHA1',
+    nextRotationDate: typeof a.nextRotationDate === 'string' ? a.nextRotationDate : undefined,
   }));
 
   const settings = stripCredentialHashes(parsed.settings || {});
@@ -331,17 +322,17 @@ export function parseOnlyAuthJSON(json: string): ImportResult {
     const accounts: Account[] = [];
     for (const item of rawAccounts) {
       const acc = importAccountBase({
-        name: item.name as string | undefined,
-        secret: item.secret as string | undefined,
-        email: item.email as string | undefined,
-        notes: item.notes as string | undefined,
-        category: item.category as string | undefined,
-        isPinned: item.isPinned as boolean | undefined,
-        logoType: item.logoType as string | undefined,
-        tags: item.tags as string[] | undefined,
-        digits: item.digits as number | undefined,
-        period: item.period as number | undefined,
-        algorithm: item.algorithm as string | undefined,
+        name: typeof item.name === 'string' ? item.name : undefined,
+        secret: typeof item.secret === 'string' ? item.secret : undefined,
+        email: typeof item.email === 'string' ? item.email : undefined,
+        notes: typeof item.notes === 'string' ? item.notes : undefined,
+        category: typeof item.category === 'string' ? item.category : undefined,
+        isPinned: typeof item.isPinned === 'boolean' ? item.isPinned : undefined,
+        logoType: typeof item.logoType === 'string' ? item.logoType : undefined,
+        tags: Array.isArray(item.tags) ? (item.tags as string[]) : undefined,
+        digits: typeof item.digits === 'number' ? item.digits : undefined,
+        period: typeof item.period === 'number' ? item.period : undefined,
+        algorithm: typeof item.algorithm === 'string' ? item.algorithm : undefined,
       });
       if (acc) accounts.push(acc);
     }
@@ -435,9 +426,9 @@ export function parseGoogleAuthJSON(json: string): ImportResult {
       if (!secret) continue;
       const acc = importAccountBase({
         name: (item.issuer as string | undefined) || (item.name as string | undefined) || (item.label as string | undefined),
-        secret,
+        secret: secret as string,
         email: (item.label as string | undefined) || (item.email as string | undefined) || '',
-        algorithm: item.algorithm as string | undefined,
+        algorithm: item.algorithm as 'SHA1' | 'SHA256' | 'SHA512' | undefined,
         digits: item.digits as number | undefined,
         period: item.period as number | undefined,
       });
