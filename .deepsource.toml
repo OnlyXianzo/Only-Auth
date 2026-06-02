@@ -1,0 +1,23 @@
+version = 1
+
+# Exclude build artifacts, dependencies, and generated files
+exclude_patterns = [
+  "node_modules/**",
+  "dist/**",
+  "target/**",
+  "graphify-out/**",
+  "public/brands/**",
+  "*.bak",
+]
+
+[[analyzers]]
+name = "javascript"
+enabled = true
+
+  [analyzers.meta]
+  plugins = ["react"]
+  environment = ["browser"]
+
+[[analyzers]]
+name = "rust"
+enabled = true
