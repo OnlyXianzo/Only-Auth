@@ -1473,7 +1473,7 @@ export default function App() {
     await verifyAndUnlock(input, unlockMethod === 'pin' ? 'pin' : 'passphrase');
   };
 
-  const handleBiometricUnlock = async () => {
+  const handleBiometricUnlock = () => {
     setUnlockError('');
     setIsBiometricSimulating(true);
   };
@@ -1822,7 +1822,7 @@ export default function App() {
   // (Ente Auth, Bitwarden, Google Auth JSON import removed — use universal otpauth:// URI import instead)
 
   // ── Passphrase / PIN / Master Key updates (current passphrase verification required)
-  const handleRegeneratePassphrase = async () => {
+  const handleRegeneratePassphrase = () => {
     const words = generatePassphrase(12);
     setNewPassphraseWords(words);
   };
@@ -3322,7 +3322,7 @@ export default function App() {
                         const time = new Date(parseInt(parts[0], 10) * 1000).toLocaleString();
                         const isAlert = log.includes('DURESS') || log.includes('Failed');
                         return (
-                          <div key={i} className={`flex items-start justify-between py-1 border-b border-white/3 last:border-0 ${isAlert ? 'text-red-400' : 'text-neutral-400'}`}>
+                          <div key={parts[0]} className={`flex items-start justify-between py-1 border-b border-white/3 last:border-0 ${isAlert ? 'text-red-400' : 'text-neutral-400'}`}>
                             <span className="shrink-0 text-white/40 mr-4">{time}</span>
                             <span className="flex-1 break-all text-right">{parts[1]}</span>
                           </div>
@@ -3745,7 +3745,7 @@ export default function App() {
 
                           {/* Universal otpauth:// URI Import (Ente, Bitwarden, Google Auth, etc.) */}
                           <div className="relative">
-                            <input type="file" accept=".txt,.uri" onChange={async (e) => {
+                            <input type="file" accept=".txt,.uri" onChange={(e) => {
                               const file = e.target.files?.[0]; if (!file) return;
                               const reader = new FileReader();
                               reader.onload = ev => {
@@ -3782,7 +3782,7 @@ export default function App() {
                             className="w-full bg-[#1c1b1b]/80 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/60 transition-all placeholder-[#8e90a2]"
                           />
                           <div className="relative">
-                            <input type="file" accept=".sealed,.txt,.json" onChange={async (e) => {
+                            <input type="file" accept=".sealed,.txt,.json" onChange={(e) => {
                               const file = e.target.files?.[0]; if (!file) return;
                               if (!backupPassword) {
                                 showToast('Please enter the backup password first.', 'error');
