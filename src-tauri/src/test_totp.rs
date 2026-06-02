@@ -1,8 +1,8 @@
 use totp_rs::{Secret, TOTP, Algorithm};
 
 fn main() {
-    let secret = Secret::generate_secret();
-    let encoded = secret.to_encoded().to_string();
+    let _secret = Secret::generate_secret();
+    let _encoded = _secret.to_encoded().to_string();
     
     let totp = TOTP::new(
         Algorithm::SHA1,

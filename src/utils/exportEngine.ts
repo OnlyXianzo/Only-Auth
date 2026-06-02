@@ -98,14 +98,7 @@ function createAccountId(): string {
 }
 
 function stripCredentialHashes(settings: Partial<AppSettings>): Partial<AppSettings> {
-  const clean = { ...settings };
-  delete clean.passphraseHash;
-  delete clean.masterKeyHash;
-  delete clean.pinHash;
-  delete clean.authHashes;
-  delete clean.authMetadata;
-  delete clean.duressPinHash;
-  delete clean.duressPassphraseHash;
+  const { passphraseHash, masterKeyHash, pinHash, authHashes, authMetadata, duressPinHash, duressPassphraseHash, ...clean } = settings;
   return clean;
 }
 
@@ -256,22 +249,22 @@ export function buildSealedPayload(accounts: Account[], settings: Partial<AppSet
 
 export function parseSealedPayload(json: string): { accounts: Account[]; settings: Partial<AppSettings> } {
   const parsed = JSON.parse(json);
-    const accounts = (parsed.accounts || []).map((a: any) => ({
-    id: a.id || createAccountId(),
-    name: a.name || 'Imported',
-    email: a.email || '',
-    secret: (a.secret || '').toUpperCase(),
-    notes: a.notes || '',
-    category: a.category || 'personal',
+    const accounts = (parsed.accounts || []).map((a: Record<string, unknown>) => ({
+    id: (typeof a.id === 'string' ? a.id : undefined) || createAccountId(),
+    name: (typeof a.name === 'string' ? a.name : undefined) || 'Imported',
+    email: (typeof a.email === 'string' ? a.email : undefined) || '',
+    secret: (typeof a.secret === 'string' ? a.secret : '').toUpperCase(),
+    notes: (typeof a.notes === 'string' ? a.notes : undefined) || '',
+    category: (typeof a.category === 'string' ? a.category : undefined) || 'personal',
     isPinned: Boolean(a.isPinned),
-    logoType: a.logoType || 'custom',
-    color: a.color,
-    tags: a.tags || [],
-    createdAt: a.createdAt || new Date().toISOString(),
-    digits: a.digits ?? 6,
-    period: a.period ?? 30,
-    algorithm: a.algorithm || 'SHA1',
-    nextRotationDate: a.nextRotationDate,
+    logoType: (typeof a.logoType === 'string' ? a.logoType : undefined) || 'custom',
+    color: typeof a.color === 'string' ? a.color : undefined,
+    tags: Array.isArray(a.tags) ? a.tags : [],
+    createdAt: (typeof a.createdAt === 'string' ? a.createdAt : undefined) || new Date().toISOString(),
+    digits: (typeof a.digits === 'number' ? a.digits : undefined) ?? 6,
+    period: (typeof a.period === 'number' ? a.period : undefined) ?? 30,
+    algorithm: (typeof a.algorithm === 'string' ? a.algorithm : undefined) || 'SHA1',
+    nextRotationDate: typeof a.nextRotationDate === 'string' ? a.nextRotationDate : undefined,
   }));
 
   const settings = stripCredentialHashes(parsed.settings || {});
@@ -317,7 +310,7 @@ export function parseOnlyAuthJSON(json: string): ImportResult {
   const warnings: string[] = [];
   try {
     const data = JSON.parse(json);
-    let rawAccounts: any[] = [];
+    let rawAccounts: Record<string, unknown>[] = [];
     if (Array.isArray(data)) rawAccounts = data;
     else if (data.accounts && Array.isArray(data.accounts)) rawAccounts = data.accounts;
     else throw new Error('Unrecognized Only Auth JSON structure');
@@ -325,25 +318,25 @@ export function parseOnlyAuthJSON(json: string): ImportResult {
     const accounts: Account[] = [];
     for (const item of rawAccounts) {
       const acc = importAccountBase({
-        name: item.name,
-        secret: item.secret,
-        email: item.email,
-        notes: item.notes,
-        category: item.category,
-        isPinned: item.isPinned,
-        logoType: item.logoType,
-        tags: item.tags,
-        digits: item.digits,
-        period: item.period,
-        algorithm: item.algorithm,
+        name: typeof item.name === 'string' ? item.name : undefined,
+        secret: typeof item.secret === 'string' ? item.secret : undefined,
+        email: typeof item.email === 'string' ? item.email : undefined,
+        notes: typeof item.notes === 'string' ? item.notes : undefined,
+        category: typeof item.category === 'string' ? item.category : undefined,
+        isPinned: typeof item.isPinned === 'boolean' ? item.isPinned : undefined,
+        logoType: typeof item.logoType === 'string' ? item.logoType : undefined,
+        tags: Array.isArray(item.tags) ? item.tags : undefined,
+        digits: typeof item.digits === 'number' ? item.digits : undefined,
+        period: typeof item.period === 'number' ? item.period : undefined,
+        algorithm: typeof item.algorithm === 'string' ? item.algorithm : undefined,
       });
       if (acc) accounts.push(acc);
     }
 
     if (accounts.length === 0) warnings.push('No valid TOTP accounts found in Only Auth JSON.');
     return { accounts, warnings };
-  } catch (e: any) {
-    return { accounts: [], warnings: [`Failed to parse Only Auth JSON: ${e.message}`] };
+  } catch (e) {
+    return { accounts: [], warnings: [`Failed to parse Only Auth JSON: ${e instanceof Error ? e.message : String(e)}`] };
   }
 }
 
@@ -351,7 +344,7 @@ export function parseEnteAuthJSON(json: string): ImportResult {
   const warnings: string[] = [];
   try {
     const data = JSON.parse(json);
-    const rawAccounts = Array.isArray(data) ? data : data.accounts || [];
+    const rawAccounts: Record<string, unknown>[] = Array.isArray(data) ? data : (data.accounts || []);
     if (!Array.isArray(rawAccounts)) throw new Error('Ente JSON has no accounts array');
 
     const accounts: Account[] = [];
@@ -359,23 +352,23 @@ export function parseEnteAuthJSON(json: string): ImportResult {
       const secret = item.secret || item.key;
       if (!secret) continue;
       const acc = importAccountBase({
-        name: item.issuer || item.name,
-        secret,
-        email: item.label || item.username || item.email,
-        notes: item.notes,
+        name: (item.issuer || item.name) as string | undefined,
+        secret: secret as string,
+        email: (item.label || item.username || item.email) as string | undefined,
+        notes: item.notes as string | undefined,
       });
       if (acc) {
-        acc.digits = item.digits ?? 6;
-        acc.period = item.period ?? 30;
-        acc.algorithm = item.algorithm || 'SHA1';
+        acc.digits = (item.digits as number | undefined) ?? 6;
+        acc.period = (item.period as number | undefined) ?? 30;
+        acc.algorithm = (item.algorithm as "SHA1" | "SHA256" | "SHA512" | undefined) || 'SHA1';
         accounts.push(acc);
       }
     }
 
     if (accounts.length === 0) warnings.push('No valid TOTP secrets found in Ente Auth JSON.');
     return { accounts, warnings };
-  } catch (e: any) {
-    return { accounts: [], warnings: [`Failed to parse Ente Auth JSON: ${e.message}`] };
+  } catch (e) {
+    return { accounts: [], warnings: [`Failed to parse Ente Auth JSON: ${e instanceof Error ? e.message : String(e)}`] };
   }
 }
 
@@ -403,8 +396,8 @@ export function parseBitwardenJSON(json: string): ImportResult {
 
     if (accounts.length === 0) warnings.push('No login items with valid TOTP secrets found in Bitwarden JSON.');
     return { accounts, warnings };
-  } catch (e: any) {
-    return { accounts: [], warnings: [`Failed to parse Bitwarden JSON: ${e.message}`] };
+  } catch (e) {
+    return { accounts: [], warnings: [`Failed to parse Bitwarden JSON: ${e instanceof Error ? e.message : String(e)}`] };
   }
 }
 
@@ -412,7 +405,7 @@ export function parseGoogleAuthJSON(json: string): ImportResult {
   const warnings: string[] = [];
   try {
     const data = JSON.parse(json);
-    const rawAccounts = data.otp_parameters || [];
+    const rawAccounts: Record<string, unknown>[] = data.otp_parameters || [];
     if (!Array.isArray(rawAccounts)) throw new Error('Google Auth JSON has no otp_parameters array');
 
     const accounts: Account[] = [];
@@ -420,20 +413,20 @@ export function parseGoogleAuthJSON(json: string): ImportResult {
       const secret = item.secret;
       if (!secret) continue;
       const acc = importAccountBase({
-        name: item.issuer || item.name || item.label,
-        secret,
-        email: item.label || item.email || '',
-        algorithm: item.algorithm || 'SHA1',
-        digits: item.digits || 6,
-        period: item.period || 30,
+        name: (item.issuer || item.name || item.label) as string | undefined,
+        secret: secret as string,
+        email: (item.label || item.email || '') as string | undefined,
+        algorithm: (item.algorithm || 'SHA1') as "SHA1" | "SHA256" | "SHA512" | undefined,
+        digits: (item.digits || 6) as number | undefined,
+        period: (item.period || 30) as number | undefined,
       });
       if (acc) accounts.push(acc);
     }
 
     if (accounts.length === 0) warnings.push('No valid TOTP parameters found in Google Auth JSON.');
     return { accounts, warnings };
-  } catch (e: any) {
-    return { accounts: [], warnings: [`Failed to parse Google Authenticator JSON: ${e.message}`] };
+  } catch (e) {
+    return { accounts: [], warnings: [`Failed to parse Google Authenticator JSON: ${e instanceof Error ? e.message : String(e)}`] };
   }
 }
 

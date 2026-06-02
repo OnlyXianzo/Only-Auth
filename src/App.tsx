@@ -156,7 +156,7 @@ async function loadBrandCatalog(): Promise<typeof _brandCatalog> {
     const res = await fetch('/brands/_data/custom-icons.json');
     const data = await res.json();
     _brandCatalog = [...EXTRA_ALIASES, ...(data.icons || [])];
-  } catch {
+  } catch (err) { console.warn(err);
     _brandCatalog = [...EXTRA_ALIASES];
   }
   return _brandCatalog;
@@ -296,10 +296,10 @@ type ToastType = 'success' | 'error' | 'info';
 interface Toast { id: string; message: string; type: ToastType; }
 
 // ─── FIDO2 / WebAuthn Mock Registration Subcomponent ───
-function WebAuthnRegFlow({ keyName, onCancel, onComplete }: { keyName: string; onCancel: () => void; onComplete: (key: any) => void }) {
+function WebAuthnRegFlow({ keyName, onCancel, onComplete }: { keyName: string; onCancel: () => void; onComplete: (key: unknown) => void }) {
   const [step, setStep] = useState<'detecting' | 'touch' | 'generated'>('detecting');
   const [progress, setProgress] = useState(0);
-  const [mockCred, setMockCred] = useState<any>(null);
+  const [mockCred, setMockCred] = useState<unknown>(null);
 
   useEffect(() => {
     if (step === 'detecting') {
@@ -547,7 +547,7 @@ export default function App() {
 
   const [settings, setSettings] = useState<AppSettings>(() => {
     const saved = localStorage.getItem('onlyauth_settings_v3');
-    if (saved) { try { const p = JSON.parse(saved); if (p && typeof p === 'object') return { ...DEFAULT_SETTINGS, ...p }; } catch { /* invalid saved settings */ } }
+    if (saved) { try { const p = JSON.parse(saved); if (p && typeof p === 'object') return { ...DEFAULT_SETTINGS, ...p }; } catch (err) { console.debug(err);  /* invalid saved settings */ } }
     return DEFAULT_SETTINGS;
   });
 
@@ -634,7 +634,7 @@ export default function App() {
       if ((window as any).__TAURI__) {
         return await (window as any).__TAURI__.invoke('verify_hidden_credentials', { input });
       }
-    } catch { /* Tauri unavailable, use browser fallback */ }
+    } catch (err) { console.debug(err);  /* Tauri unavailable, use browser fallback */ }
     // Fallback mock logic for web environment:
     // If no hash is set, default secret is "9999" (PIN) or the master passphrase/key hash matching
     if (!settings.hiddenVaultSettings?.hash) {
@@ -852,15 +852,15 @@ export default function App() {
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     // Tauri-native focus change listener wrapping
-    let unlistenBlur: any;
-    let unlistenFocus: any;
+    let unlistenBlur: (() => void) | undefined;
+    let unlistenFocus: (() => void) | undefined;
     const setupTauriListeners = async () => {
       try {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
         const win = getCurrentWindow() as any;
         unlistenBlur = await win.onBlur(handleBlur);
         unlistenFocus = await win.onFocus(handleFocus);
-      } catch { /* not in Tauri environment */ }
+      } catch (err) { console.debug(err);  /* not in Tauri environment */ }
     };
     setupTauriListeners();
 
@@ -919,7 +919,8 @@ export default function App() {
   const [isVerificationModalOpen, setIsVerificationModalOpen] = useState(false);
   const [verificationInput, setVerificationInput] = useState('');
   const [verificationError, setVerificationError] = useState('');
-  const [pendingAction, setPendingAction] = useState<{ type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock' | 'export'; data?: any } | null>(null);
+  const [pendingAction, setPendingAction] = useState<{ type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock' | 'export'; data?: unknown } | null>(null);
+  const [confirmModal, setConfirmModal] = useState<{ isOpen: boolean; message: string; onConfirm: () => void } | null>(null);
   const [showVerificationInput, setShowVerificationInput] = useState(false);
 
   // Add/Edit form
@@ -1497,7 +1498,7 @@ export default function App() {
     setShowSecret(prev => !prev);
   };
 
-  const triggerVerifyAction = (type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock' | 'export', data?: any) => safeTransition(() => {
+  const triggerVerifyAction = (type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock' | 'export', data?: unknown) => safeTransition(() => {
     setPendingAction({ type, data });
     setVerificationInput('');
     setVerificationError('');
@@ -1569,7 +1570,7 @@ export default function App() {
               setNewPinField('');
               setNewPinConfirm('');
               showToast('PIN updated successfully.', 'success');
-            } catch {
+            } catch (err) { console.warn(err);
               showToast('Failed to compute secure PIN hash.', 'error');
             }
           });
@@ -1672,11 +1673,15 @@ export default function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
       if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play(); }
       setCameraStatus('Point camera at the QR code.');
-    } catch (e: any) {
-      if (e.message === 'SecureContextError') {
-        setCameraStatus('Security Error: Camera requires an HTTPS connection or localhost context.');
-      } else if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
-        setCameraStatus('Permission Denied: Please grant camera access in browser or settings.');
+    } catch (e) {
+      if (e instanceof Error) {
+        if (e.message === 'SecureContextError') {
+          setCameraStatus('Security Error: Camera requires an HTTPS connection or localhost context.');
+        } else if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+          setCameraStatus('Permission Denied: Please grant camera access in browser or settings.');
+        } else {
+          setCameraStatus('No camera found or access failed. Please upload a QR code image.');
+        }
       } else {
         setCameraStatus('No camera found or access failed. Please upload a QR code image.');
       }
@@ -1717,10 +1722,7 @@ export default function App() {
   };
   const deleteTag = (tag: string) => {
     if (['personal', 'work'].includes(tag)) return;
-    if (!confirm(`Remove tag "${tag}"? Accounts will move to "personal".`)) return;
-    setAccounts(prev => prev.map(a => a.category === tag ? { ...a, category: 'personal' } : a));
-    setSettings(prev => ({ ...prev, customTags: prev.customTags.filter(t => t !== tag) }));
-    if (activeTag === tag) setActiveTag('all');
+    setConfirmModal({ isOpen: true, message: `Remove tag "${tag}"? Accounts will move to "personal".`, onConfirm: () => { setAccounts(prev => prev.map(a => a.category === tag ? { ...a, category: 'personal' } : a)); setSettings(prev => ({ ...prev, customTags: prev.customTags.filter(t => t !== tag) })); if (activeTag === tag) setActiveTag('all'); setConfirmModal(null); } });
   };
 
   // ── Security keys
@@ -1759,7 +1761,7 @@ export default function App() {
         const savedPath = await exportFile(filename, content);
         setSettings(prev => ({ ...prev, lastBackupDate: new Date().toISOString() }));
         showToast(`Export saved successfully to: ${savedPath}`, 'success');
-      } catch (e: any) {
+      } catch (e) {
         if (e === 'Save cancelled') {
           showToast('Export cancelled.', 'info');
         } else {
@@ -1792,7 +1794,7 @@ export default function App() {
           setAccounts(prev => [...result.accounts, ...prev]);
           showToast(`Imported ${result.accounts.length} account${result.accounts.length !== 1 ? 's' : ''} from Only Auth JSON.`, 'success');
         });
-      } catch { showToast('Invalid backup file. Check the format and try again.', 'error'); }
+      } catch (err) { console.warn(err);  showToast('Invalid backup file. Check the format and try again.', 'error'); }
     };
     reader.readAsText(file);
   };
@@ -1840,7 +1842,7 @@ export default function App() {
           await navigator.clipboard.writeText('');
           showToast('Clipboard cleared for security.', 'info');
         }
-      } catch {
+      } catch (err) { console.warn(err);
         // Fallback overwrite if clipboard read permissions are blocked by browser security
         await navigator.clipboard.writeText('');
       }
@@ -2000,7 +2002,7 @@ export default function App() {
                 <p className="text-[10px] uppercase tracking-widest font-semibold text-[#c4c5d9] mb-3">Your {setupWordCount}-Word Passphrase</p>
                 <div className="grid grid-cols-3 gap-2">
                   {setupWords.map((word, i) => (
-                    <div key={`${i}-${word}`} className="word-cell">
+                    <div key={`word-${i}-${word}`} className="word-cell">
                       <span className="word-index">{i + 1}.</span>
                       <span>{word}</span>
                     </div>
@@ -2325,7 +2327,7 @@ export default function App() {
                 if (method === 'biometrics' && (!biometricsSupported || settings.appLockMethod !== 'biometrics')) return null;
                 if (method === 'hardware' && settings.securityKeys.length === 0) return null;
                 return (
-                  <button key={method} type="button" onClick={() => { setUnlockMethod(method as any); setUnlockError(''); setUnlockInput(''); }}
+                  <button key={method} type="button" onClick={() => { setUnlockMethod(method as 'pin' | 'passphrase'); setUnlockError(''); setUnlockInput(''); }}
                     className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all capitalize ${unlockMethod === method ? 'bg-white/10 text-white' : 'text-[#8e90a2] hover:text-white'}`}>
                     {method === 'biometrics' ? '⬡ Bio' : method === 'hardware' ? 'FIDO2 Key' : 'Keypad'}
                   </button>
@@ -3246,16 +3248,21 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => {
-                            if (confirm('Remove Duress PIN?')) {
-                              setSettings(prev => ({ 
-                                ...prev, 
-                                duressPinHash: '', 
-                                duressPassphraseHash: '',
-                                authHashes: [],
-                                authMetadata: {}
-                              }));
-                              showToast('Duress PIN removed.', 'info');
-                            }
+                            setConfirmModal({
+                              isOpen: true,
+                              message: 'Remove Duress PIN?',
+                              onConfirm: () => {
+                                setSettings(prev => ({
+                                  ...prev,
+                                  duressPinHash: '',
+                                  duressPassphraseHash: '',
+                                  authHashes: [],
+                                  authMetadata: {}
+                                }));
+                                showToast('Duress PIN removed.', 'info');
+                                setConfirmModal(null);
+                              }
+                            });
                           }}
                           className="w-full mt-1.5 py-1 text-[10px] text-red-400 hover:text-red-300 font-semibold text-center transition-colors"
                         >
@@ -3280,7 +3287,7 @@ export default function App() {
                           const logs = await readAuditLogs(decryptedLogKeyHex);
                           setAuditLogs(logs);
                           showToast('Tamper logs loaded successfully.', 'success');
-                        } catch {
+                        } catch (err) { console.warn(err);
                           showToast('Failed to decrypt audit logs.', 'error');
                         }
                       }}
@@ -3392,7 +3399,7 @@ export default function App() {
                               const offset = serverTime - clientTime;
                               setSettings(prev => ({ ...prev, timeOffsetSeconds: offset }));
                               showToast(`Clock Drift Synced. Calculated Offset: ${offset}s`, 'success');
-                            } catch {
+                            } catch (err) { console.warn(err);
                               showToast('Failed to sync time online. Using manual calibration.', 'error');
                             }
                           }}
@@ -3590,7 +3597,7 @@ export default function App() {
                       <div className="space-y-4">
                         <div className="grid grid-cols-3 gap-2">
                           {newPassphraseWords.map((word, i) => (
-                            <div key={`${i}-${word}`} className="word-cell">
+                            <div key={`word-${i}-${word}`} className="word-cell">
                               <span className="word-index">{i + 1}.</span>
                               <span>{word}</span>
                             </div>
@@ -3734,7 +3741,7 @@ export default function App() {
                                     setAccounts(prev => [...result.accounts, ...prev]);
                                     showToast(`Imported ${result.accounts.length} account${result.accounts.length !== 1 ? 's' : ''} from otpauth URIs.`, 'success');
                                   });
-                                } catch { showToast('Failed to parse URI file.', 'error'); }
+                                } catch (err) { console.warn(err);  showToast('Failed to parse URI file.', 'error'); }
                               };
                               reader.readAsText(file);
                             }} className="hidden" id="uri-import-input" />
@@ -3774,7 +3781,7 @@ export default function App() {
                                     showToast('Integrity seal verified. Accounts restored (credential hashes stripped).', 'success');
                                     setBackupPassword('');
                                   });
-                                } catch (err: any) {
+                                } catch (err) {
                                   showToast(err.message || 'Verification failed. Tampering detected or wrong password.', 'error');
                                 }
                               };
@@ -3817,7 +3824,7 @@ export default function App() {
                             <Download className="w-3.5 h-3.5" />
                           </button>
 
-                          <button onClick={() => { if (confirm('WARNING: This will permanently delete ALL accounts from your vault. This action cannot be undone. Continue?')) { setAccounts([]); } }}
+                          <button onClick={() => setConfirmModal({ isOpen: true, message: 'WARNING: This will permanently delete ALL accounts from your vault. This action cannot be undone. Continue?', onConfirm: () => { setAccounts([]); setConfirmModal(null); } })}
                             className="w-full h-10 px-4 rounded-xl border border-red-500/20 hover:border-red-500/40 hover:bg-red-950/10 text-red-400 transition-all text-xs font-semibold flex items-center justify-between">
                             <span>Factory Reset Vault</span>
                             <AlertTriangle className="w-3.5 h-3.5" />
@@ -3854,7 +3861,7 @@ export default function App() {
                                 showToast('Encrypted backup with Integrity Seal generated.', 'success');
                                 setBackupPassword('');
                                 setSettings(prev => ({ ...prev, lastBackupDate: new Date().toISOString() }));
-                              } catch {
+                              } catch (err) { console.warn(err);
                                 showToast('Backup encryption failed.', 'error');
                               }
                             }}
@@ -3995,7 +4002,7 @@ export default function App() {
                   <h4 className="text-xs uppercase tracking-widest text-[#8e90a2] font-semibold">Help Assistant</h4>
                   <div className="h-36 overflow-y-auto space-y-2.5 bg-black/30 p-3 rounded-xl border border-white/8 font-mono text-[11px] text-[#8e90a2]">
                     {chatMessages.map((m, i) => (
-                      <div key={`${i}-${m.sender}-${m.time}`} className={m.sender === 'user' ? 'text-white text-right' : 'text-[var(--color-accent)]'}>
+                      <div key={`msg-${i}-${m.sender}-${m.time}`} className={m.sender === 'user' ? 'text-white text-right' : 'text-[var(--color-accent)]'}>
                         <span className="text-[9px] opacity-40 mr-1">{m.time}</span>
                         <strong>{m.sender === 'user' ? 'You: ' : 'Only Auth: '}</strong>
                         <span>{m.text}</span>
@@ -4273,7 +4280,7 @@ export default function App() {
                     <label className="text-[9px] uppercase font-bold text-[#8e90a2] tracking-wider block">Algorithm</label>
                     <select
                       value={formAlgorithm}
-                      onChange={e => setFormAlgorithm(e.target.value as any)}
+                      onChange={e => setFormAlgorithm(e.target.value as 'SHA1' | 'SHA256' | 'SHA512')}
                       className="w-full bg-[#1c1b1b] border border-white/10 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/60"
                     >
                       <option value="SHA1">SHA-1 (Default)</option>
@@ -4491,7 +4498,7 @@ export default function App() {
                   setDuressSetupPin('');
                   setDuressSetupConfirm('');
                   showToast('Duress PIN configured successfully.', 'success');
-                } catch {
+                } catch (err) { console.warn(err);
                   setDuressSetupError('Error deriving secure Argon2id hash.');
                 }
               }} className="space-y-4">
@@ -4653,7 +4660,7 @@ export default function App() {
                     setIsWebAuthnRegistering(false);
                     setWebAuthnRegKeyName('');
                   }}
-                  onComplete={(newKey) => {
+                  onComplete={(newKey: any) => {
                     setSettings(prev => ({ ...prev, securityKeys: [...prev.securityKeys, newKey] }));
                     setIsWebAuthnRegistering(false);
                     setWebAuthnRegKeyName('');
@@ -4730,6 +4737,32 @@ export default function App() {
                     showToast('Vault successfully unlocked via Biometrics.', 'success');
                   }}
                 />
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+
+      {/* ── CONFIRM MODAL ── */}
+      <AnimatePresence>
+        {confirmModal?.isOpen && (
+          <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-sm bg-[#0a0a0a] rounded-3xl p-6 border border-white/5 flex flex-col items-center gap-5 relative overflow-hidden">
+              <div className="text-center space-y-2">
+                <h3 className="font-display font-semibold text-white text-base">Confirm Action</h3>
+                <p className="text-xs text-[#8e90a2] leading-relaxed">{confirmModal.message}</p>
+              </div>
+              <div className="flex gap-3 w-full mt-2">
+                <button type="button" onClick={() => setConfirmModal(null)}
+                  className="flex-1 py-2 text-xs font-semibold text-[#8e90a2] hover:text-white bg-white/5 hover:bg-white/10 rounded-xl transition-colors">
+                  Cancel
+                </button>
+                <button type="button" onClick={confirmModal.onConfirm}
+                  className="flex-1 py-2 text-xs font-semibold text-black bg-[var(--color-accent)] hover:opacity-90 rounded-xl transition-opacity">
+                  Confirm
+                </button>
               </div>
             </motion.div>
           </div>

@@ -206,16 +206,17 @@ pub fn read_audit_logs(app: AppHandle, key_hex: String) -> Result<Vec<String>, S
 }
 
 pub fn validate_export_filename(filename: &str) -> Result<String, String> {
-    if filename.is_empty() {
+    let normalized_filename = filename.replace("\\", "/");
+    if normalized_filename.is_empty() {
         return Err("Filename cannot be empty".to_string());
     }
 
-    let lower_filename = filename.to_lowercase();
+    let lower_filename = normalized_filename.to_lowercase();
     if !lower_filename.ends_with(".json") && !lower_filename.ends_with(".txt") && !lower_filename.ends_with(".html") {
         return Err("Invalid file extension. Only .json, .txt, and .html are permitted.".to_string());
     }
 
-    let path_suggestion = std::path::Path::new(filename);
+    let path_suggestion = std::path::Path::new(&normalized_filename);
     let safe_filename = match path_suggestion.file_name() {
         Some(name) => name.to_string_lossy().into_owned(),
         None => return Err("Invalid filename".to_string()),
