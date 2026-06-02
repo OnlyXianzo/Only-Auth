@@ -9,6 +9,10 @@ use aes_gcm::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Represents a structured secure TOTP/2FA vault account record.
+/// 
+/// Contains metadata and key material relating to an individual credential
+/// stored at rest in the encrypted vault space.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct VaultAccount {
@@ -41,6 +45,10 @@ fn get_storage_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// Tauri command to load all serialized vault account credentials from the local storage.
+/// 
+/// # Errors
+/// Returns an error string if path access or JSON parsing fails.
 #[tauri::command]
 pub fn load_vault_data(app: AppHandle) -> Result<Vec<VaultAccount>, String> {
     let path = get_storage_path(&app)?;
@@ -55,6 +63,12 @@ pub fn load_vault_data(app: AppHandle) -> Result<Vec<VaultAccount>, String> {
     Ok(accounts)
 }
 
+/// Tauri command to save a list of vault account credentials to local storage securely.
+/// 
+/// Sanitizes sensitive secrets from memory using the `zeroize` allocator once saved.
+/// 
+/// # Errors
+/// Returns an error string if serialization or file writing fails.
 #[tauri::command]
 pub fn save_vault_data(app: AppHandle, mut accounts: Vec<VaultAccount>) -> Result<(), String> {
     let path = get_storage_path(&app)?;
@@ -74,6 +88,13 @@ pub fn save_vault_data(app: AppHandle, mut accounts: Vec<VaultAccount>) -> Resul
     Ok(())
 }
 
+/// Tauri command to append an event to the security audit trail log.
+/// 
+/// If the vault is unlocked, writes the event in an encrypted block via AES-256-GCM.
+/// If locked, logs are buffered in a temporary pending state queue until unlock.
+/// 
+/// # Errors
+/// Returns an error string if path access or encryption fails.
 #[tauri::command]
 pub fn write_audit_log(app: AppHandle, event: String, key_hex: Option<String>) -> Result<(), String> {
     let path = app.path().app_data_dir().map_err(|_| "Failed to get app data directory".to_string())?;
@@ -162,6 +183,12 @@ pub fn write_audit_log(app: AppHandle, event: String, key_hex: Option<String>) -
     Ok(())
 }
 
+/// Tauri command to read and decrypt all logged security audit events.
+/// 
+/// Decrypts the append-only logs utilizing the derived Argon2id key hex.
+/// 
+/// # Errors
+/// Returns an error string if key conversion, decryption, or files read fail.
 #[tauri::command]
 pub fn read_audit_logs(app: AppHandle, key_hex: String) -> Result<Vec<String>, String> {
     let mut path = app.path().app_data_dir().map_err(|_| "Failed to get app data directory".to_string())?;
@@ -205,6 +232,12 @@ pub fn read_audit_logs(app: AppHandle, key_hex: String) -> Result<Vec<String>, S
     Ok(results)
 }
 
+/// Validates and normalizes target filenames to prevent directory traversal and verify format compatibility.
+/// 
+/// Only permits export formats using `.json`, `.txt`, and `.html` suffixes.
+/// 
+/// # Errors
+/// Returns an error string if the file format or extension is invalid.
 pub fn validate_export_filename(filename: &str) -> Result<String, String> {
     if filename.is_empty() {
         return Err("Filename cannot be empty".to_string());
@@ -225,6 +258,10 @@ pub fn validate_export_filename(filename: &str) -> Result<String, String> {
     Ok(safe_filename)
 }
 
+/// Tauri command that saves a string payload to a user-selected path using the native dialog manager.
+/// 
+/// # Errors
+/// Returns an error string if filename validation, path resolution, or writing fails.
 #[tauri::command]
 pub async fn export_file(app: AppHandle, filename: String, content: String) -> Result<String, String> {
     use tauri_plugin_dialog::DialogExt;

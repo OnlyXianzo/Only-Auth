@@ -79,7 +79,7 @@ async function sha256(text: string): Promise<string> {
 
 async function createAuthCredential(enteredInput: string, type: 'pin' | 'passphrase' | 'masterKey' | 'duress', action?: 'wipe' | 'fake') {
   const hash = await argon2idHash(enteredInput);
-  const keyMaterial = await sha256(enteredInput + "OnlyAuthMetadataDerivationSalt2026");
+  const keyMaterial = await sha256(`${enteredInput}OnlyAuthMetadataDerivationSalt2026`);
   const payload = JSON.stringify(action ? { type, action } : { type });
   const encMeta = await encryptMetadata(payload, keyMaterial);
   return { hash, encMeta };
@@ -1560,7 +1560,7 @@ export default function App() {
           deleteAccountConfirmed(pendingAction.data as string);
         } else if (pendingAction?.type === 'update-passphrase') {
           const passphraseData = pendingAction.data as { newPassphrase: string };
-          sha256(passphraseData.newPassphrase + "OnlyAuthAuditLogSalt2026").then(async newKeyHex => {
+          sha256(`${passphraseData.newPassphrase}OnlyAuthAuditLogSalt2026`).then(async newKeyHex => {
             await saveVaultData(accounts, newKeyHex);
             setDecryptedLogKeyHex(newKeyHex);
             const newHash = await sha256(passphraseData.newPassphrase);
@@ -1571,7 +1571,7 @@ export default function App() {
         } else if (pendingAction?.type === 'update-pin') {
           const pinData = pendingAction.data as { newPin: string };
           const newPin = pinData.newPin;
-          sha256(newPin + "OnlyAuthAuditLogSalt2026").then(async newKeyHex => {
+          sha256(`${newPin}OnlyAuthAuditLogSalt2026`).then(async newKeyHex => {
             await saveVaultData(accounts, newKeyHex);
             setDecryptedLogKeyHex(newKeyHex);
             
@@ -1579,9 +1579,11 @@ export default function App() {
               const pinCred = await createAuthCredential(newPin, 'pin');
               const oldPinHash = settings.pinHash;
               const currentHashes = (settings.authHashes || []).filter(h => h !== oldPinHash);
-              const currentMetadata = { ...settings.authMetadata };
+              let currentMetadata = { ...settings.authMetadata };
               if (oldPinHash) {
-                delete currentMetadata[oldPinHash];
+                currentMetadata = Object.fromEntries(
+                  Object.entries(currentMetadata).filter(([k]) => k !== oldPinHash)
+                );
               }
 
               setSettings(prev => ({
@@ -1603,7 +1605,7 @@ export default function App() {
           });
         } else if (pendingAction?.type === 'update-masterkey') {
           const keyData = pendingAction.data as { newKey: string };
-          sha256(keyData.newKey + "OnlyAuthAuditLogSalt2026").then(async newKeyHex => {
+          sha256(`${keyData.newKey}OnlyAuthAuditLogSalt2026`).then(async newKeyHex => {
             await saveVaultData(accounts, newKeyHex);
             setDecryptedLogKeyHex(newKeyHex);
             const newHash = await sha256(keyData.newKey);
@@ -2444,7 +2446,7 @@ export default function App() {
                         <button key={num} type="button"
                           onClick={() => {
                             if (unlockInput.length < 8) {
-                              setUnlockInput(prev => prev + num);
+                              setUnlockInput(prev => `${prev}${num}`);
                             }
                           }}
                           className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-base font-semibold text-white flex items-center justify-center mx-auto">
@@ -2459,7 +2461,7 @@ export default function App() {
                       <button type="button"
                         onClick={() => {
                           if (unlockInput.length < 8) {
-                            setUnlockInput(prev => prev + '0');
+                            setUnlockInput(prev => `${prev}0`);
                           }
                         }}
                         className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-base font-semibold text-white flex items-center justify-center mx-auto">
