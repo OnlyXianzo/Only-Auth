@@ -33,6 +33,21 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
+      - name: Decode Windows Certificate
+        shell: bash
+        run: |
+          echo "${{ secrets.WINDOWS_CERT_BASE64 }}" | base64 --decode > src-tauri/windows-cert.pfx
+
+      - name: Sign Windows Executable
+        shell: powershell
+        run: |
+          $exePath = Get-ChildItem -Path "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -ExpandProperty FullName
+          signtool sign /f "src-tauri/windows-cert.pfx" /p "${{ secrets.WINDOWS_CERT_PASSWORD }}" /tr http://timestamp.digicert.com /td sha256 /fd sha256 $exePath
+
+      - name: Clean up Certificate
+        shell: bash
+        run: rm -f src-tauri/windows-cert.pfx
+
       - name: Upload Windows Executable
         uses: actions/upload-artifact@v4
         with:
@@ -134,8 +149,32 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
+      - name: Decode Android Keystore
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > src-tauri/android.keystore
+
+      - name: Sign Android APK
+        run: |
+          BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | tail -1)
+          UNSIGNED_APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*unsigned.apk" | head -n 1)
+          echo "Found unsigned APK: $UNSIGNED_APK"
+          $BUILD_TOOLS_DIR/zipalign -v 4 "$UNSIGNED_APK" app-release-aligned.apk
+          $BUILD_TOOLS_DIR/apksigner sign \
+            --ks src-tauri/android.keystore \
+            --ks-key-alias "${{ secrets.ANDROID_KEY_ALIAS }}" \
+            --ks-pass pass:"${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+            --key-pass pass:"${{ secrets.ANDROID_KEY_PASSWORD }}" \
+            --out app-release-signed.apk \
+            app-release-aligned.apk
+          $BUILD_TOOLS_DIR/apksigner verify app-release-signed.apk
+          mkdir -p src-tauri/gen/android/app/build/outputs/apk/release
+          cp app-release-signed.apk src-tauri/gen/android/app/build/outputs/apk/release/only-auth-signed.apk
+
+      - name: Clean up Keystore
+        run: rm -f src-tauri/android.keystore
+
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
           name: only-auth-android-apk
-          path: src-tauri/gen/android/app/build/outputs/apk/**/release/*.apk
+          path: src-tauri/gen/android/app/build/outputs/apk/release/only-auth-signed.apk
