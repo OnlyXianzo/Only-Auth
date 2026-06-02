@@ -215,7 +215,8 @@ pub fn validate_export_filename(filename: &str) -> Result<String, String> {
         return Err("Invalid file extension. Only .json, .txt, and .html are permitted.".to_string());
     }
 
-    let path_suggestion = std::path::Path::new(filename);
+    let normalized = filename.replace('\\', "/");
+    let path_suggestion = std::path::Path::new(&normalized);
     let safe_filename = match path_suggestion.file_name() {
         Some(name) => name.to_string_lossy().into_owned(),
         None => return Err("Invalid filename".to_string()),

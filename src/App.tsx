@@ -295,11 +295,29 @@ const DEFAULT_SETTINGS: AppSettings = {
 type ToastType = 'success' | 'error' | 'info';
 interface Toast { id: string; message: string; type: ToastType; }
 
+interface MockSecurityKey {
+  id: string;
+  name: string;
+  keyType: string;
+  addedAt: string;
+}
+
+interface MockFIDO2Credential {
+  id: string;
+  type: string;
+  rawId: string;
+  response: {
+    clientDataJSON: string;
+    attestationObject: string;
+    transports: string[];
+  };
+}
+
 // ─── FIDO2 / WebAuthn Mock Registration Subcomponent ───
-function WebAuthnRegFlow({ keyName, onCancel, onComplete }: { keyName: string; onCancel: () => void; onComplete: (key: any) => void }) {
+function WebAuthnRegFlow({ keyName, onCancel, onComplete }: { keyName: string; onCancel: () => void; onComplete: (key: MockSecurityKey) => void }) {
   const [step, setStep] = useState<'detecting' | 'touch' | 'generated'>('detecting');
   const [progress, setProgress] = useState(0);
-  const [mockCred, setMockCred] = useState<any>(null);
+  const [mockCred, setMockCred] = useState<MockFIDO2Credential | null>(null);
 
   useEffect(() => {
     if (step === 'detecting') {
@@ -374,12 +392,12 @@ function WebAuthnRegFlow({ keyName, onCancel, onComplete }: { keyName: string; o
     <div className="flex flex-col gap-3 animate-fade-in">
       <div className="p-3 bg-black/40 border border-white/5 rounded-xl text-left space-y-1.5 font-mono text-[9px] text-green-400 overflow-x-auto max-h-[140px] select-text scrollbar-thin">
         <p className="text-white border-b border-white/10 pb-1 font-bold">✓ Credentials Created</p>
-        <p>id: {mockCred.id.substring(0, 20)}...</p>
-        <p>type: {mockCred.type}</p>
-        <p>rawId: {mockCred.rawId.substring(0, 16)}...</p>
+        <p>id: {mockCred?.id.substring(0, 20)}...</p>
+        <p>type: {mockCred?.type}</p>
+        <p>rawId: {mockCred?.rawId.substring(0, 16)}...</p>
         <div className="text-zinc-400 pt-1">response: &#123;</div>
-        <p className="pl-3 text-zinc-500">clientDataJSON: "{mockCred.response.clientDataJSON.substring(0, 24)}..."</p>
-        <p className="pl-3 text-zinc-500">attestationObject: "{mockCred.response.attestationObject.substring(0, 24)}..."</p>
+        <p className="pl-3 text-zinc-500">clientDataJSON: "{mockCred?.response.clientDataJSON.substring(0, 24)}..."</p>
+        <p className="pl-3 text-zinc-500">attestationObject: "{mockCred?.response.attestationObject.substring(0, 24)}..."</p>
         <div className="text-zinc-400">&#125;</div>
       </div>
       <p className="text-xs text-[#c4c5d9] text-center">FIDO2 key registered with client signature.</p>
@@ -388,12 +406,14 @@ function WebAuthnRegFlow({ keyName, onCancel, onComplete }: { keyName: string; o
         <button
           type="button"
           onClick={() => {
-            onComplete({
-              id: mockCred.id,
-              name: keyName,
-              keyType: 'FIDO2 / WebAuthn Mock',
-              addedAt: new Date().toISOString()
-            });
+            if (mockCred) {
+              onComplete({
+                id: mockCred.id,
+                name: keyName,
+                keyType: 'FIDO2 / WebAuthn Mock',
+                addedAt: new Date().toISOString()
+              });
+            }
           }}
           className="flex-1 py-2 text-xs bg-[var(--color-accent)] text-black font-semibold rounded-xl hover:opacity-90 transition-opacity"
         >
@@ -852,8 +872,8 @@ export default function App() {
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     // Tauri-native focus change listener wrapping
-    let unlistenBlur: any;
-    let unlistenFocus: any;
+    let unlistenBlur: (() => void) | undefined;
+    let unlistenFocus: (() => void) | undefined;
     const setupTauriListeners = async () => {
       try {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -917,9 +937,14 @@ export default function App() {
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [copyFeedbackMap, setCopyFeedbackMap] = useState<Record<string, boolean>>({});
   const [isVerificationModalOpen, setIsVerificationModalOpen] = useState(false);
+  const [confirmModal, setConfirmModal] = useState<{
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
   const [verificationInput, setVerificationInput] = useState('');
   const [verificationError, setVerificationError] = useState('');
-  const [pendingAction, setPendingAction] = useState<{ type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock' | 'export'; data?: any } | null>(null);
+  const [pendingAction, setPendingAction] = useState<{ type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock' | 'export'; data?: unknown } | null>(null);
   const [showVerificationInput, setShowVerificationInput] = useState(false);
 
   // Add/Edit form
@@ -1497,7 +1522,7 @@ export default function App() {
     setShowSecret(prev => !prev);
   };
 
-  const triggerVerifyAction = (type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock' | 'export', data?: any) => safeTransition(() => {
+  const triggerVerifyAction = (type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock' | 'export', data?: unknown) => safeTransition(() => {
     setPendingAction({ type, data });
     setVerificationInput('');
     setVerificationError('');
@@ -1532,18 +1557,20 @@ export default function App() {
         } else if (pendingAction?.type === 'save') {
           saveAccountConfirmed();
         } else if (pendingAction?.type === 'delete') {
-          deleteAccountConfirmed(pendingAction.data);
+          deleteAccountConfirmed(pendingAction.data as string);
         } else if (pendingAction?.type === 'update-passphrase') {
-          sha256(pendingAction.data.newPassphrase + "OnlyAuthAuditLogSalt2026").then(async newKeyHex => {
+          const passphraseData = pendingAction.data as { newPassphrase: string };
+          sha256(passphraseData.newPassphrase + "OnlyAuthAuditLogSalt2026").then(async newKeyHex => {
             await saveVaultData(accounts, newKeyHex);
             setDecryptedLogKeyHex(newKeyHex);
-            const newHash = await sha256(pendingAction.data.newPassphrase);
+            const newHash = await sha256(passphraseData.newPassphrase);
             setSettings(prev => ({ ...prev, passphraseHash: newHash }));
             setNewPassphraseWords([]);
             showToast('Passphrase updated. Use your new passphrase to unlock.', 'success');
           });
         } else if (pendingAction?.type === 'update-pin') {
-          const newPin = pendingAction.data.newPin;
+          const pinData = pendingAction.data as { newPin: string };
+          const newPin = pinData.newPin;
           sha256(newPin + "OnlyAuthAuditLogSalt2026").then(async newKeyHex => {
             await saveVaultData(accounts, newKeyHex);
             setDecryptedLogKeyHex(newKeyHex);
@@ -1569,21 +1596,24 @@ export default function App() {
               setNewPinField('');
               setNewPinConfirm('');
               showToast('PIN updated successfully.', 'success');
-            } catch {
+            } catch (err) {
+              console.warn('Failed to compute PIN hash:', err);
               showToast('Failed to compute secure PIN hash.', 'error');
             }
           });
         } else if (pendingAction?.type === 'update-masterkey') {
-          sha256(pendingAction.data.newKey + "OnlyAuthAuditLogSalt2026").then(async newKeyHex => {
+          const keyData = pendingAction.data as { newKey: string };
+          sha256(keyData.newKey + "OnlyAuthAuditLogSalt2026").then(async newKeyHex => {
             await saveVaultData(accounts, newKeyHex);
             setDecryptedLogKeyHex(newKeyHex);
-            const newHash = await sha256(pendingAction.data.newKey);
+            const newHash = await sha256(keyData.newKey);
             setSettings(prev => ({ ...prev, masterKeyHash: newHash }));
             setNewMasterKeyField('');
             showToast('Master Key updated successfully.', 'success');
           });
         } else if (pendingAction?.type === 'update-partition-settings') {
-          const { method, passcode } = pendingAction.data;
+          const partitionData = pendingAction.data as { method: 'pin' | 'biometrics' | 'passphrase'; passcode: string };
+          const { method, passcode } = partitionData;
           sha256(passcode).then(newHash => {
             setSettings(prev => ({
               ...prev,
@@ -1672,10 +1702,11 @@ export default function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
       if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play(); }
       setCameraStatus('Point camera at the QR code.');
-    } catch (e: any) {
-      if (e.message === 'SecureContextError') {
+    } catch (e) {
+      const err = e as { name?: string; message?: string };
+      if (err.message === 'SecureContextError') {
         setCameraStatus('Security Error: Camera requires an HTTPS connection or localhost context.');
-      } else if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+      } else if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         setCameraStatus('Permission Denied: Please grant camera access in browser or settings.');
       } else {
         setCameraStatus('No camera found or access failed. Please upload a QR code image.');
@@ -1717,10 +1748,15 @@ export default function App() {
   };
   const deleteTag = (tag: string) => {
     if (['personal', 'work'].includes(tag)) return;
-    if (!confirm(`Remove tag "${tag}"? Accounts will move to "personal".`)) return;
-    setAccounts(prev => prev.map(a => a.category === tag ? { ...a, category: 'personal' } : a));
-    setSettings(prev => ({ ...prev, customTags: prev.customTags.filter(t => t !== tag) }));
-    if (activeTag === tag) setActiveTag('all');
+    setConfirmModal({
+      title: 'Remove Tag',
+      message: `Remove tag "${tag}"? Accounts will move to "personal".`,
+      onConfirm: () => {
+        setAccounts(prev => prev.map(a => a.category === tag ? { ...a, category: 'personal' } : a));
+        setSettings(prev => ({ ...prev, customTags: prev.customTags.filter(t => t !== tag) }));
+        if (activeTag === tag) setActiveTag('all');
+      }
+    });
   };
 
   // ── Security keys
@@ -1759,11 +1795,12 @@ export default function App() {
         const savedPath = await exportFile(filename, content);
         setSettings(prev => ({ ...prev, lastBackupDate: new Date().toISOString() }));
         showToast(`Export saved successfully to: ${savedPath}`, 'success');
-      } catch (e: any) {
+      } catch (e) {
         if (e === 'Save cancelled') {
           showToast('Export cancelled.', 'info');
         } else {
-          showToast(`Native export failed: ${e?.message || e}`, 'error');
+          const err = e as { message?: string } | null;
+          showToast(`Native export failed: ${err?.message || String(e)}`, 'error');
         }
       }
     } else {
@@ -3246,16 +3283,20 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => {
-                            if (confirm('Remove Duress PIN?')) {
-                              setSettings(prev => ({ 
-                                ...prev, 
-                                duressPinHash: '', 
-                                duressPassphraseHash: '',
-                                authHashes: [],
-                                authMetadata: {}
-                              }));
-                              showToast('Duress PIN removed.', 'info');
-                            }
+                            setConfirmModal({
+                              title: 'Remove Duress PIN',
+                              message: 'Are you sure you want to remove the Duress PIN?',
+                              onConfirm: () => {
+                                setSettings(prev => ({ 
+                                  ...prev, 
+                                  duressPinHash: '', 
+                                  duressPassphraseHash: '',
+                                  authHashes: [],
+                                  authMetadata: {}
+                                }));
+                                showToast('Duress PIN removed.', 'info');
+                              }
+                            });
                           }}
                           className="w-full mt-1.5 py-1 text-[10px] text-red-400 hover:text-red-300 font-semibold text-center transition-colors"
                         >
@@ -3774,8 +3815,9 @@ export default function App() {
                                     showToast('Integrity seal verified. Accounts restored (credential hashes stripped).', 'success');
                                     setBackupPassword('');
                                   });
-                                } catch (err: any) {
-                                  showToast(err.message || 'Verification failed. Tampering detected or wrong password.', 'error');
+                                } catch (err) {
+                                  const error = err as { message?: string } | null;
+                                  showToast(error?.message || 'Verification failed. Tampering detected or wrong password.', 'error');
                                 }
                               };
                               reader.readAsText(file);
@@ -3817,7 +3859,17 @@ export default function App() {
                             <Download className="w-3.5 h-3.5" />
                           </button>
 
-                          <button onClick={() => { if (confirm('WARNING: This will permanently delete ALL accounts from your vault. This action cannot be undone. Continue?')) { setAccounts([]); } }}
+                           <button onClick={() => {
+                            setConfirmModal({
+                              title: 'Factory Reset Vault',
+                              message: 'WARNING: This will permanently delete ALL accounts from your vault. This action cannot be undone. Continue?',
+                              onConfirm: () => {
+                                setAccounts([]);
+                                saveVaultData([], decryptedLogKeyHex);
+                                showToast('Vault has been successfully reset to empty.', 'info');
+                              }
+                            });
+                          }}
                             className="w-full h-10 px-4 rounded-xl border border-red-500/20 hover:border-red-500/40 hover:bg-red-950/10 text-red-400 transition-all text-xs font-semibold flex items-center justify-between">
                             <span>Factory Reset Vault</span>
                             <AlertTriangle className="w-3.5 h-3.5" />
@@ -4575,6 +4627,23 @@ export default function App() {
                   <button type="submit" className="px-5 py-1.5 text-xs bg-[var(--color-accent)] text-black font-semibold rounded-lg hover:opacity-90 transition-opacity">Confirm</button>
                 </div>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ── CUSTOM CONFIRMATION MODAL ────────────────────────────────────── */}
+      <AnimatePresence>
+        {confirmModal && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-sm glass-panel rounded-2xl p-6 border border-white/5 space-y-4">
+              <h3 className="font-display font-semibold text-white text-base">{confirmModal.title}</h3>
+              <p className="text-xs text-[#c4c5d9] leading-relaxed">{confirmModal.message}</p>
+              <div className="flex gap-3 justify-end pt-2 border-t border-white/8">
+                <button onClick={() => setConfirmModal(null)} className="px-3 py-1.5 text-xs text-[#8e90a2] hover:text-white font-semibold">Cancel</button>
+                <button onClick={() => { confirmModal.onConfirm(); setConfirmModal(null); }} className="px-3 py-1.5 text-xs bg-rose-600 hover:bg-rose-500 text-white font-semibold rounded-lg transition-colors">Confirm</button>
+              </div>
             </motion.div>
           </div>
         )}
