@@ -248,8 +248,8 @@ export function buildSealedPayload(accounts: Account[], settings: Partial<AppSet
 }
 
 export function parseSealedPayload(json: string): { accounts: Account[]; settings: Partial<AppSettings> } {
-  const parsed = JSON.parse(json);
-    const accounts = (parsed.accounts || []).map((a: Record<string, unknown>) => ({
+  const parsed = JSON.parse(json) as { accounts?: Record<string, unknown>[]; settings?: Partial<AppSettings> };
+  const accounts = (parsed.accounts || []).map((a) => ({
     id: (typeof a.id === 'string' ? a.id : undefined) || createAccountId(),
     name: (typeof a.name === 'string' ? a.name : undefined) || 'Imported',
     email: (typeof a.email === 'string' ? a.email : undefined) || '',
@@ -257,13 +257,13 @@ export function parseSealedPayload(json: string): { accounts: Account[]; setting
     notes: (typeof a.notes === 'string' ? a.notes : undefined) || '',
     category: (typeof a.category === 'string' ? a.category : undefined) || 'personal',
     isPinned: Boolean(a.isPinned),
-    logoType: (typeof a.logoType === 'string' ? a.logoType : undefined) || 'custom',
+    logoType: (typeof a.logoType === 'string' ? a.logoType as Account['logoType'] : undefined) || 'custom',
     color: typeof a.color === 'string' ? a.color : undefined,
-    tags: Array.isArray(a.tags) ? a.tags : [],
+    tags: Array.isArray(a.tags) ? (a.tags as string[]) : [],
     createdAt: (typeof a.createdAt === 'string' ? a.createdAt : undefined) || new Date().toISOString(),
     digits: (typeof a.digits === 'number' ? a.digits : undefined) ?? 6,
     period: (typeof a.period === 'number' ? a.period : undefined) ?? 30,
-    algorithm: (typeof a.algorithm === 'string' ? a.algorithm : undefined) || 'SHA1',
+    algorithm: (typeof a.algorithm === 'string' ? a.algorithm as 'SHA1' | 'SHA256' | 'SHA512' : undefined) || 'SHA1',
     nextRotationDate: typeof a.nextRotationDate === 'string' ? a.nextRotationDate : undefined,
   }));
 
@@ -309,11 +309,15 @@ function importAccountBase(item: {
 export function parseOnlyAuthJSON(json: string): ImportResult {
   const warnings: string[] = [];
   try {
-    const data = JSON.parse(json);
+    const data = JSON.parse(json) as Record<string, unknown> | unknown[];
     let rawAccounts: Record<string, unknown>[] = [];
-    if (Array.isArray(data)) rawAccounts = data;
-    else if (data.accounts && Array.isArray(data.accounts)) rawAccounts = data.accounts;
-    else throw new Error('Unrecognized Only Auth JSON structure');
+    if (Array.isArray(data)) {
+      rawAccounts = data as Record<string, unknown>[];
+    } else if (data && typeof data === 'object' && 'accounts' in data && Array.isArray((data as Record<string, unknown>).accounts)) {
+      rawAccounts = (data as Record<string, unknown>).accounts as Record<string, unknown>[];
+    } else {
+      throw new Error('Unrecognized Only Auth JSON structure');
+    }
 
     const accounts: Account[] = [];
     for (const item of rawAccounts) {
@@ -325,7 +329,7 @@ export function parseOnlyAuthJSON(json: string): ImportResult {
         category: typeof item.category === 'string' ? item.category : undefined,
         isPinned: typeof item.isPinned === 'boolean' ? item.isPinned : undefined,
         logoType: typeof item.logoType === 'string' ? item.logoType : undefined,
-        tags: Array.isArray(item.tags) ? item.tags : undefined,
+        tags: Array.isArray(item.tags) ? (item.tags as string[]) : undefined,
         digits: typeof item.digits === 'number' ? item.digits : undefined,
         period: typeof item.period === 'number' ? item.period : undefined,
         algorithm: typeof item.algorithm === 'string' ? item.algorithm : undefined,
@@ -336,31 +340,35 @@ export function parseOnlyAuthJSON(json: string): ImportResult {
     if (accounts.length === 0) warnings.push('No valid TOTP accounts found in Only Auth JSON.');
     return { accounts, warnings };
   } catch (e) {
-    return { accounts: [], warnings: [`Failed to parse Only Auth JSON: ${e instanceof Error ? e.message : String(e)}`] };
+    const message = e instanceof Error ? e.message : String(e);
+    return { accounts: [], warnings: [`Failed to parse Only Auth JSON: ${message}`] };
   }
 }
 
 export function parseEnteAuthJSON(json: string): ImportResult {
   const warnings: string[] = [];
   try {
-    const data = JSON.parse(json);
-    const rawAccounts: Record<string, unknown>[] = Array.isArray(data) ? data : (data.accounts || []);
+    const data = JSON.parse(json) as Record<string, unknown> | unknown[];
+    const rawAccounts = Array.isArray(data)
+      ? data
+      : (data && typeof data === 'object' && 'accounts' in data ? (data as Record<string, unknown>).accounts : []) || [];
     if (!Array.isArray(rawAccounts)) throw new Error('Ente JSON has no accounts array');
 
     const accounts: Account[] = [];
-    for (const item of rawAccounts) {
-      const secret = item.secret || item.key;
+    for (const rawItem of rawAccounts) {
+      const item = rawItem as Record<string, unknown>;
+      const secret = (item.secret as string | undefined) || (item.key as string | undefined);
       if (!secret) continue;
       const acc = importAccountBase({
-        name: (item.issuer || item.name) as string | undefined,
-        secret: secret as string,
-        email: (item.label || item.username || item.email) as string | undefined,
+        name: (item.issuer as string | undefined) || (item.name as string | undefined),
+        secret,
+        email: (item.label as string | undefined) || (item.username as string | undefined) || (item.email as string | undefined),
         notes: item.notes as string | undefined,
       });
       if (acc) {
         acc.digits = (item.digits as number | undefined) ?? 6;
         acc.period = (item.period as number | undefined) ?? 30;
-        acc.algorithm = (item.algorithm as "SHA1" | "SHA256" | "SHA512" | undefined) || 'SHA1';
+        acc.algorithm = (item.algorithm as Account['algorithm'] | undefined) || 'SHA1';
         accounts.push(acc);
       }
     }
@@ -368,28 +376,30 @@ export function parseEnteAuthJSON(json: string): ImportResult {
     if (accounts.length === 0) warnings.push('No valid TOTP secrets found in Ente Auth JSON.');
     return { accounts, warnings };
   } catch (e) {
-    return { accounts: [], warnings: [`Failed to parse Ente Auth JSON: ${e instanceof Error ? e.message : String(e)}`] };
+    const message = e instanceof Error ? e.message : String(e);
+    return { accounts: [], warnings: [`Failed to parse Ente Auth JSON: ${message}`] };
   }
 }
 
 export function parseBitwardenJSON(json: string): ImportResult {
   const warnings: string[] = [];
   try {
-    const data = JSON.parse(json);
+    const data = JSON.parse(json) as Record<string, unknown>;
     const items = data.items || [];
     if (!Array.isArray(items)) throw new Error('Bitwarden JSON has no items array');
 
     const accounts: Account[] = [];
-    for (const item of items) {
-      const login = item.login;
+    for (const rawItem of items) {
+      const item = rawItem as Record<string, unknown>;
+      const login = item.login as { totp?: string; username?: string } | undefined;
       if (!login?.totp) continue;
       const secret = extractSecretFromURI(login.totp);
       if (!secret) continue;
       const acc = importAccountBase({
-        name: item.name || item.collectionIds?.[0],
+        name: (item.name as string | undefined) || ((item.collectionIds as string[] | undefined)?.[0]),
         secret,
         email: login.username,
-        notes: item.notes,
+        notes: item.notes as string | undefined,
       });
       if (acc) accounts.push(acc);
     }
@@ -397,28 +407,30 @@ export function parseBitwardenJSON(json: string): ImportResult {
     if (accounts.length === 0) warnings.push('No login items with valid TOTP secrets found in Bitwarden JSON.');
     return { accounts, warnings };
   } catch (e) {
-    return { accounts: [], warnings: [`Failed to parse Bitwarden JSON: ${e instanceof Error ? e.message : String(e)}`] };
+    const message = e instanceof Error ? e.message : String(e);
+    return { accounts: [], warnings: [`Failed to parse Bitwarden JSON: ${message}`] };
   }
 }
 
 export function parseGoogleAuthJSON(json: string): ImportResult {
   const warnings: string[] = [];
   try {
-    const data = JSON.parse(json);
-    const rawAccounts: Record<string, unknown>[] = data.otp_parameters || [];
+    const data = JSON.parse(json) as Record<string, unknown>;
+    const rawAccounts = data.otp_parameters || [];
     if (!Array.isArray(rawAccounts)) throw new Error('Google Auth JSON has no otp_parameters array');
 
     const accounts: Account[] = [];
-    for (const item of rawAccounts) {
-      const secret = item.secret;
+    for (const rawItem of rawAccounts) {
+      const item = rawItem as Record<string, unknown>;
+      const secret = item.secret as string | undefined;
       if (!secret) continue;
       const acc = importAccountBase({
-        name: (item.issuer || item.name || item.label) as string | undefined,
+        name: (item.issuer as string | undefined) || (item.name as string | undefined) || (item.label as string | undefined),
         secret: secret as string,
-        email: (item.label || item.email || '') as string | undefined,
-        algorithm: (item.algorithm || 'SHA1') as "SHA1" | "SHA256" | "SHA512" | undefined,
-        digits: (item.digits || 6) as number | undefined,
-        period: (item.period || 30) as number | undefined,
+        email: (item.label as string | undefined) || (item.email as string | undefined) || '',
+        algorithm: item.algorithm as 'SHA1' | 'SHA256' | 'SHA512' | undefined,
+        digits: item.digits as number | undefined,
+        period: item.period as number | undefined,
       });
       if (acc) accounts.push(acc);
     }
@@ -426,7 +438,8 @@ export function parseGoogleAuthJSON(json: string): ImportResult {
     if (accounts.length === 0) warnings.push('No valid TOTP parameters found in Google Auth JSON.');
     return { accounts, warnings };
   } catch (e) {
-    return { accounts: [], warnings: [`Failed to parse Google Authenticator JSON: ${e instanceof Error ? e.message : String(e)}`] };
+    const message = e instanceof Error ? e.message : String(e);
+    return { accounts: [], warnings: [`Failed to parse Google Authenticator JSON: ${message}`] };
   }
 }
 

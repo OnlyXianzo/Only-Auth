@@ -1,6 +1,5 @@
 {
   "name": "Only Auth",
-  "description": "A gorgeous, secure glassmorphic two-factor authenticator dashboard featuring real-time TOTP generation, search, vault locking, and account management.",
-  "requestFramePermissions": ["camera"],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "description": "A secure, clinical local-first two-factor authenticator dashboard featuring real-time TOTP generation, search, vault locking, and account management.",
+  "requestFramePermissions": ["camera"]
 }

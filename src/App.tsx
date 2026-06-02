@@ -79,7 +79,7 @@ async function sha256(text: string): Promise<string> {
 
 async function createAuthCredential(enteredInput: string, type: 'pin' | 'passphrase' | 'masterKey' | 'duress', action?: 'wipe' | 'fake') {
   const hash = await argon2idHash(enteredInput);
-  const keyMaterial = await sha256(enteredInput + "OnlyAuthMetadataDerivationSalt2026");
+  const keyMaterial = await sha256(`${enteredInput}OnlyAuthMetadataDerivationSalt2026`);
   const payload = JSON.stringify(action ? { type, action } : { type });
   const encMeta = await encryptMetadata(payload, keyMaterial);
   return { hash, encMeta };
@@ -295,11 +295,29 @@ const DEFAULT_SETTINGS: AppSettings = {
 type ToastType = 'success' | 'error' | 'info';
 interface Toast { id: string; message: string; type: ToastType; }
 
+interface MockSecurityKey {
+  id: string;
+  name: string;
+  keyType: string;
+  addedAt: string;
+}
+
+interface MockFIDO2Credential {
+  id: string;
+  type: string;
+  rawId: string;
+  response: {
+    clientDataJSON: string;
+    attestationObject: string;
+    transports: string[];
+  };
+}
+
 // ─── FIDO2 / WebAuthn Mock Registration Subcomponent ───
-function WebAuthnRegFlow({ keyName, onCancel, onComplete }: { keyName: string; onCancel: () => void; onComplete: (key: unknown) => void }) {
+function WebAuthnRegFlow({ keyName, onCancel, onComplete }: { keyName: string; onCancel: () => void; onComplete: (key: MockSecurityKey) => void }) {
   const [step, setStep] = useState<'detecting' | 'touch' | 'generated'>('detecting');
   const [progress, setProgress] = useState(0);
-  const [mockCred, setMockCred] = useState<unknown>(null);
+  const [mockCred, setMockCred] = useState<MockFIDO2Credential | null>(null);
 
   useEffect(() => {
     if (step === 'detecting') {
@@ -374,12 +392,12 @@ function WebAuthnRegFlow({ keyName, onCancel, onComplete }: { keyName: string; o
     <div className="flex flex-col gap-3 animate-fade-in">
       <div className="p-3 bg-black/40 border border-white/5 rounded-xl text-left space-y-1.5 font-mono text-[9px] text-green-400 overflow-x-auto max-h-[140px] select-text scrollbar-thin">
         <p className="text-white border-b border-white/10 pb-1 font-bold">✓ Credentials Created</p>
-        <p>id: {mockCred.id.substring(0, 20)}...</p>
-        <p>type: {mockCred.type}</p>
-        <p>rawId: {mockCred.rawId.substring(0, 16)}...</p>
+        <p>id: {mockCred?.id.substring(0, 20)}...</p>
+        <p>type: {mockCred?.type}</p>
+        <p>rawId: {mockCred?.rawId.substring(0, 16)}...</p>
         <div className="text-zinc-400 pt-1">response: &#123;</div>
-        <p className="pl-3 text-zinc-500">clientDataJSON: "{mockCred.response.clientDataJSON.substring(0, 24)}..."</p>
-        <p className="pl-3 text-zinc-500">attestationObject: "{mockCred.response.attestationObject.substring(0, 24)}..."</p>
+        <p className="pl-3 text-zinc-500">clientDataJSON: "{mockCred?.response.clientDataJSON.substring(0, 24)}..."</p>
+        <p className="pl-3 text-zinc-500">attestationObject: "{mockCred?.response.attestationObject.substring(0, 24)}..."</p>
         <div className="text-zinc-400">&#125;</div>
       </div>
       <p className="text-xs text-[#c4c5d9] text-center">FIDO2 key registered with client signature.</p>
@@ -388,12 +406,14 @@ function WebAuthnRegFlow({ keyName, onCancel, onComplete }: { keyName: string; o
         <button
           type="button"
           onClick={() => {
-            onComplete({
-              id: mockCred.id,
-              name: keyName,
-              keyType: 'FIDO2 / WebAuthn Mock',
-              addedAt: new Date().toISOString()
-            });
+            if (mockCred) {
+              onComplete({
+                id: mockCred.id,
+                name: keyName,
+                keyType: 'FIDO2 / WebAuthn Mock',
+                addedAt: new Date().toISOString()
+              });
+            }
           }}
           className="flex-1 py-2 text-xs bg-[var(--color-accent)] text-black font-semibold rounded-xl hover:opacity-90 transition-opacity"
         >
@@ -528,6 +548,40 @@ function BiometricsFlow({ onCancel, onComplete }: { onCancel: () => void; onComp
       </div>
       <p className="text-xs text-emerald-400 font-semibold font-mono">Biometrics Authenticated!</p>
       <p className="text-[10px] text-[#8e90a2]">Access granted.</p>
+    </div>
+  );
+}
+
+
+// ─── Account Footer Subcomponent ─────────────────────────────────────────────
+function AccountFooter({ focusedAccount, c, focusedCode, handleCopyCode }: { focusedAccount: any, c: boolean, focusedCode: string, handleCopyCode: (id: string, code: string) => void }) {
+  const accountPeriod = focusedAccount.period || 30;
+  const [accountSecondsRemaining, setAccountSecondsRemaining] = useState(accountPeriod - (Math.floor(Date.now() / 1000) % accountPeriod));
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setAccountSecondsRemaining(accountPeriod - (Math.floor(Date.now() / 1000) % accountPeriod));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [accountPeriod]);
+
+  return (
+    <div className={`flex flex-col gap-3 border-t border-white/5 ${c ? 'pt-3' : 'pt-4'} relative z-10`}>
+      {!c && focusedAccount.notes && (
+        <p className="text-xs text-[#c4c5d9] leading-relaxed italic">{focusedAccount.notes}</p>
+      )}
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-[#8e90a2]">Refreshes in <span className="font-mono text-white font-semibold">{accountSecondsRemaining}s</span></span>
+        {focusedAccount.secret && focusedAccount.secret.trim() !== "" && (
+          <button onClick={() => handleCopyCode(focusedAccount.id, focusedCode)}
+            className="flex items-center gap-1 text-[var(--color-accent)] hover:text-white transition-colors">
+            <Copy className="w-3.5 h-3.5" /> <span>Copy Code</span>
+          </button>
+        )}
+      </div>
+      <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+        <div className="h-full progress-bar-inner bg-[var(--color-accent)]" style={{ width: `${(accountSecondsRemaining / accountPeriod) * 100}%` }} />
+      </div>
     </div>
   );
 }
@@ -917,10 +971,15 @@ export default function App() {
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [copyFeedbackMap, setCopyFeedbackMap] = useState<Record<string, boolean>>({});
   const [isVerificationModalOpen, setIsVerificationModalOpen] = useState(false);
+  const [confirmModal, setConfirmModal] = useState<{
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
   const [verificationInput, setVerificationInput] = useState('');
   const [verificationError, setVerificationError] = useState('');
   const [pendingAction, setPendingAction] = useState<{ type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock' | 'export'; data?: unknown } | null>(null);
-  const [confirmModal, setConfirmModal] = useState<{ isOpen: boolean; message: string; onConfirm: () => void } | null>(null);
+
   const [showVerificationInput, setShowVerificationInput] = useState(false);
 
   // Add/Edit form
@@ -1041,30 +1100,35 @@ export default function App() {
     };
   }, []);
 
-  // ── Timer (1-second tick for all time-dependent updates)
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick(t => t + 1), 1000);
-    return () => clearInterval(id);
-  }, []);
-
   // ── Batched TOTP codes from Rust backend
   const [totpCodes, setTotpCodes] = useState<Record<string, string>>({});
 
   // ⚡ Perf: totpEpoch only changes when the TOTP time window rolls over (every ~30s),
-  // not every 1-second tick. This eliminates ~29/30 batch crypto operations per period.
+  // This eliminates batch crypto operations per period.
   // Uses the minimum period across all accounts to ensure the fastest-rotating code
   // triggers a refresh in time.
-  const totpEpoch = useMemo(() => {
+  const [totpEpoch, setTotpEpoch] = useState(() => {
     const minPeriod = accounts.length > 0
       ? Math.min(...accounts.map(a => a.period || 30))
       : 30;
     const now = Math.floor(Date.now() / 1000) + (settings.timeOffsetSeconds || 0);
     return Math.floor(now / minPeriod);
-    // tick is intentionally included so this re-evaluates each second,
-    // but the returned epoch value only actually changes every minPeriod seconds
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tick, accounts, settings.timeOffsetSeconds]);
+  });
+
+  useEffect(() => {
+    const minPeriod = accounts.length > 0
+      ? Math.min(...accounts.map(a => a.period || 30))
+      : 30;
+
+    // Check every second to see if epoch needs updating
+    const id = setInterval(() => {
+      const now = Math.floor(Date.now() / 1000) + (settings.timeOffsetSeconds || 0);
+      const newEpoch = Math.floor(now / minPeriod);
+      setTotpEpoch(prev => (prev !== newEpoch ? newEpoch : prev));
+    }, 1000);
+
+    return () => clearInterval(id);
+  }, [accounts, settings.timeOffsetSeconds]);
 
   useEffect(() => {
     let isCurrent = true;
@@ -1158,7 +1222,7 @@ export default function App() {
             const encMeta = settings.authMetadata?.[hash];
             if (encMeta) {
               try {
-                const keyMaterial = await sha256(input + "OnlyAuthMetadataDerivationSalt2026");
+                const keyMaterial = await sha256(`${input}OnlyAuthMetadataDerivationSalt2026`);
                 const decrypted = await decryptMetadata(encMeta, keyMaterial);
                 const meta = JSON.parse(decrypted);
                 matchedType = meta.type;
@@ -1239,7 +1303,7 @@ export default function App() {
             }
           });
         } else {
-          const derivedKeyHex = await sha256(input + "OnlyAuthAuditLogSalt2026");
+          const derivedKeyHex = await sha256(`${input}OnlyAuthAuditLogSalt2026`);
           setDecryptedLogKeyHex(derivedKeyHex);
           await writeAuditLog(`Vault unlocked successfully (${matchedType})`, derivedKeyHex);
 
@@ -1407,7 +1471,7 @@ export default function App() {
         setupPinHash = pinCred.hash;
       }
 
-      const derivedKeyHex = await sha256(phrase + "OnlyAuthAuditLogSalt2026");
+      const derivedKeyHex = await sha256(`${phrase}OnlyAuthAuditLogSalt2026`);
       setDecryptedLogKeyHex(derivedKeyHex);
       await writeAuditLog('Vault setup completed with hardened Argon2id KDF', derivedKeyHex);
 
@@ -1533,19 +1597,21 @@ export default function App() {
         } else if (pendingAction?.type === 'save') {
           saveAccountConfirmed();
         } else if (pendingAction?.type === 'delete') {
-          deleteAccountConfirmed(pendingAction.data);
+          deleteAccountConfirmed(pendingAction.data as string);
         } else if (pendingAction?.type === 'update-passphrase') {
-          sha256(pendingAction.data.newPassphrase + "OnlyAuthAuditLogSalt2026").then(async newKeyHex => {
+          const passphraseData = pendingAction.data as { newPassphrase: string };
+          sha256(`${passphraseData.newPassphrase}OnlyAuthAuditLogSalt2026`).then(async newKeyHex => {
             await saveVaultData(accounts, newKeyHex);
             setDecryptedLogKeyHex(newKeyHex);
-            const newHash = await sha256(pendingAction.data.newPassphrase);
+            const newHash = await sha256(passphraseData.newPassphrase);
             setSettings(prev => ({ ...prev, passphraseHash: newHash }));
             setNewPassphraseWords([]);
             showToast('Passphrase updated. Use your new passphrase to unlock.', 'success');
           });
         } else if (pendingAction?.type === 'update-pin') {
-          const newPin = pendingAction.data.newPin;
-          sha256(newPin + "OnlyAuthAuditLogSalt2026").then(async newKeyHex => {
+          const pinData = pendingAction.data as { newPin: string };
+          const newPin = pinData.newPin;
+          sha256(`${newPin}OnlyAuthAuditLogSalt2026`).then(async newKeyHex => {
             await saveVaultData(accounts, newKeyHex);
             setDecryptedLogKeyHex(newKeyHex);
             
@@ -1553,9 +1619,11 @@ export default function App() {
               const pinCred = await createAuthCredential(newPin, 'pin');
               const oldPinHash = settings.pinHash;
               const currentHashes = (settings.authHashes || []).filter(h => h !== oldPinHash);
-              const currentMetadata = { ...settings.authMetadata };
+              let currentMetadata = { ...settings.authMetadata };
               if (oldPinHash) {
-                delete currentMetadata[oldPinHash];
+                currentMetadata = Object.fromEntries(
+                  Object.entries(currentMetadata).filter(([k]) => k !== oldPinHash)
+                );
               }
 
               setSettings(prev => ({
@@ -1570,21 +1638,24 @@ export default function App() {
               setNewPinField('');
               setNewPinConfirm('');
               showToast('PIN updated successfully.', 'success');
-            } catch (err) { console.warn(err);
+            } catch (err) {
+              console.warn('Failed to compute PIN hash:', err);
               showToast('Failed to compute secure PIN hash.', 'error');
             }
           });
         } else if (pendingAction?.type === 'update-masterkey') {
-          sha256(pendingAction.data.newKey + "OnlyAuthAuditLogSalt2026").then(async newKeyHex => {
+          const keyData = pendingAction.data as { newKey: string };
+          sha256(`${keyData.newKey}OnlyAuthAuditLogSalt2026`).then(async newKeyHex => {
             await saveVaultData(accounts, newKeyHex);
             setDecryptedLogKeyHex(newKeyHex);
-            const newHash = await sha256(pendingAction.data.newKey);
+            const newHash = await sha256(keyData.newKey);
             setSettings(prev => ({ ...prev, masterKeyHash: newHash }));
             setNewMasterKeyField('');
             showToast('Master Key updated successfully.', 'success');
           });
         } else if (pendingAction?.type === 'update-partition-settings') {
-          const { method, passcode } = pendingAction.data;
+          const partitionData = pendingAction.data as { method: 'pin' | 'biometrics' | 'passphrase'; passcode: string };
+          const { method, passcode } = partitionData;
           sha256(passcode).then(newHash => {
             setSettings(prev => ({
               ...prev,
@@ -1722,7 +1793,15 @@ export default function App() {
   };
   const deleteTag = (tag: string) => {
     if (['personal', 'work'].includes(tag)) return;
-    setConfirmModal({ isOpen: true, message: `Remove tag "${tag}"? Accounts will move to "personal".`, onConfirm: () => { setAccounts(prev => prev.map(a => a.category === tag ? { ...a, category: 'personal' } : a)); setSettings(prev => ({ ...prev, customTags: prev.customTags.filter(t => t !== tag) })); if (activeTag === tag) setActiveTag('all'); setConfirmModal(null); } });
+    setConfirmModal({
+      title: 'Remove Tag',
+      message: `Remove tag "${tag}"? Accounts will move to "personal".`,
+      onConfirm: () => {
+        setAccounts(prev => prev.map(a => a.category === tag ? { ...a, category: 'personal' } : a));
+        setSettings(prev => ({ ...prev, customTags: prev.customTags.filter(t => t !== tag) }));
+        if (activeTag === tag) setActiveTag('all');
+      }
+    });
   };
 
   // ── Security keys
@@ -1765,7 +1844,8 @@ export default function App() {
         if (e === 'Save cancelled') {
           showToast('Export cancelled.', 'info');
         } else {
-          showToast(`Native export failed: ${e?.message || e}`, 'error');
+          const err = e as { message?: string } | null;
+          showToast(`Native export failed: ${err?.message || String(e)}`, 'error');
         }
       }
     } else {
@@ -1886,10 +1966,10 @@ export default function App() {
     setTimeout(() => setChatMessages(prev => [...prev, { sender: 'system', text: reply, time }]), 700);
   };
 
-  // ── Computed (memoized to avoid redundant O(n) filtering on every 1-second tick re-render)
+  // ── Computed (memoized to avoid redundant O(n) filtering on re-render)
   const c = settings.compactMode;
 
-  // ⚡ Perf: visibleAccounts only changes when accounts/vault state change, not on tick
+  // ⚡ Perf: visibleAccounts only changes when accounts/vault state change
   const visibleAccounts = useMemo(() => {
     if (isFakeVaultActive) return [];
     return accounts.filter(acc => {
@@ -2137,9 +2217,9 @@ export default function App() {
                     onClick={() => {
                       const hidden = document.querySelector<HTMLInputElement>('#setup-pin-hidden');
                       if (setupPinPhase === 'enter' && setupPin.length < 8) {
-                        setSetupPin(prev => prev + num);
+                        setSetupPin(prev => `${prev}${num}`);
                       } else if (setupPinPhase === 'confirm' && setupPinConfirm.length < setupPin.length) {
-                        setSetupPinConfirm(prev => prev + num);
+                        setSetupPinConfirm(prev => `${prev}${num}`);
                       }
                       hidden?.focus();
                     }}
@@ -2162,9 +2242,9 @@ export default function App() {
                   onClick={() => {
                     const hidden = document.querySelector<HTMLInputElement>('#setup-pin-hidden');
                     if (setupPinPhase === 'enter' && setupPin.length < 8) {
-                      setSetupPin(prev => prev + '0');
+                      setSetupPin(prev => `${prev}0`);
                     } else if (setupPinPhase === 'confirm' && setupPinConfirm.length < setupPin.length) {
-                      setSetupPinConfirm(prev => prev + '0');
+                      setSetupPinConfirm(prev => `${prev}0`);
                     }
                     hidden?.focus();
                   }}
@@ -2409,7 +2489,7 @@ export default function App() {
                         <button key={num} type="button"
                           onClick={() => {
                             if (unlockInput.length < 8) {
-                              setUnlockInput(prev => prev + num);
+                              setUnlockInput(prev => `${prev}${num}`);
                             }
                           }}
                           className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-base font-semibold text-white flex items-center justify-center mx-auto">
@@ -2424,7 +2504,7 @@ export default function App() {
                       <button type="button"
                         onClick={() => {
                           if (unlockInput.length < 8) {
-                            setUnlockInput(prev => prev + '0');
+                            setUnlockInput(prev => `${prev}0`);
                           }
                         }}
                         className="w-12 h-12 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 active:scale-90 transition-all text-base font-semibold text-white flex items-center justify-center mx-auto">
@@ -2874,29 +2954,12 @@ export default function App() {
                       </div>
 
                       {/* Footer */}
-                      {(() => {
-                        const accountPeriod = focusedAccount.period || 30;
-                        const accountSecondsRemaining = accountPeriod - (Math.floor(Date.now() / 1000) % accountPeriod);
-                        return (
-                          <div className={`flex flex-col gap-3 border-t border-white/5 ${c ? 'pt-3' : 'pt-4'} relative z-10`}>
-                            {!c && focusedAccount.notes && (
-                              <p className="text-xs text-[#c4c5d9] leading-relaxed italic">{focusedAccount.notes}</p>
-                            )}
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="text-[#8e90a2]">Refreshes in <span className="font-mono text-white font-semibold">{accountSecondsRemaining}s</span></span>
-                              {focusedAccount.secret && focusedAccount.secret.trim() !== "" && (
-                                <button onClick={() => handleCopyCode(focusedAccount.id, focusedCode)}
-                                  className="flex items-center gap-1 text-[var(--color-accent)] hover:text-white transition-colors">
-                                  <Copy className="w-3.5 h-3.5" /> <span>Copy Code</span>
-                                </button>
-                              )}
-                            </div>
-                            <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
-                              <div className="h-full progress-bar-inner bg-[var(--color-accent)]" style={{ width: `${(accountSecondsRemaining / accountPeriod) * 100}%` }} />
-                            </div>
-                          </div>
-                        );
-                      })()}
+                      <AccountFooter
+                        focusedAccount={focusedAccount}
+                        c={c}
+                        focusedCode={focusedCode}
+                        handleCopyCode={handleCopyCode}
+                      />
                     </div>
                   ) : (
                     <div className="glass-panel rounded-3xl p-10 text-center flex flex-col items-center gap-4 text-[#8e90a2]">
@@ -3249,8 +3312,8 @@ export default function App() {
                           type="button"
                           onClick={() => {
                             setConfirmModal({
-                              isOpen: true,
-                              message: 'Remove Duress PIN?',
+                              title: 'Remove Duress PIN',
+                              message: 'Are you sure you want to remove the Duress PIN?',
                               onConfirm: () => {
                                 setSettings(prev => ({
                                   ...prev,
@@ -3260,7 +3323,6 @@ export default function App() {
                                   authMetadata: {}
                                 }));
                                 showToast('Duress PIN removed.', 'info');
-                                setConfirmModal(null);
                               }
                             });
                           }}
@@ -3782,7 +3844,8 @@ export default function App() {
                                     setBackupPassword('');
                                   });
                                 } catch (err) {
-                                  showToast(err.message || 'Verification failed. Tampering detected or wrong password.', 'error');
+                                  const error = err as { message?: string } | null;
+                                  showToast(error?.message || 'Verification failed. Tampering detected or wrong password.', 'error');
                                 }
                               };
                               reader.readAsText(file);
@@ -3824,7 +3887,17 @@ export default function App() {
                             <Download className="w-3.5 h-3.5" />
                           </button>
 
-                          <button onClick={() => setConfirmModal({ isOpen: true, message: 'WARNING: This will permanently delete ALL accounts from your vault. This action cannot be undone. Continue?', onConfirm: () => { setAccounts([]); setConfirmModal(null); } })}
+                           <button onClick={() => {
+                            setConfirmModal({
+                              title: 'Factory Reset Vault',
+                              message: 'WARNING: This will permanently delete ALL accounts from your vault. This action cannot be undone. Continue?',
+                              onConfirm: () => {
+                                setAccounts([]);
+                                saveVaultData([], decryptedLogKeyHex);
+                                showToast('Vault has been successfully reset to empty.', 'info');
+                              }
+                            });
+                          }}
                             className="w-full h-10 px-4 rounded-xl border border-red-500/20 hover:border-red-500/40 hover:bg-red-950/10 text-red-400 transition-all text-xs font-semibold flex items-center justify-between">
                             <span>Factory Reset Vault</span>
                             <AlertTriangle className="w-3.5 h-3.5" />
@@ -4582,6 +4655,23 @@ export default function App() {
                   <button type="submit" className="px-5 py-1.5 text-xs bg-[var(--color-accent)] text-black font-semibold rounded-lg hover:opacity-90 transition-opacity">Confirm</button>
                 </div>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ── CUSTOM CONFIRMATION MODAL ────────────────────────────────────── */}
+      <AnimatePresence>
+        {confirmModal && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-sm glass-panel rounded-2xl p-6 border border-white/5 space-y-4">
+              <h3 className="font-display font-semibold text-white text-base">{confirmModal.title}</h3>
+              <p className="text-xs text-[#c4c5d9] leading-relaxed">{confirmModal.message}</p>
+              <div className="flex gap-3 justify-end pt-2 border-t border-white/8">
+                <button onClick={() => setConfirmModal(null)} className="px-3 py-1.5 text-xs text-[#8e90a2] hover:text-white font-semibold">Cancel</button>
+                <button onClick={() => { confirmModal.onConfirm(); setConfirmModal(null); }} className="px-3 py-1.5 text-xs bg-rose-600 hover:bg-rose-500 text-white font-semibold rounded-lg transition-colors">Confirm</button>
+              </div>
             </motion.div>
           </div>
         )}

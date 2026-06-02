@@ -386,7 +386,6 @@ export async function validateImportPayload(payload: string): Promise<{ accounts
     const warnings: string[] = [];
     const sensitiveKeys = ['passphraseHash', 'masterKeyHash', 'pinHash', 'authHashes', 'authMetadata', 'duressPinHash', 'duressPassphraseHash'];
     if (parsed?.settings) {
-
       parsed.settings = Object.fromEntries(
         Object.entries(parsed.settings).filter(([key]) => {
           if (sensitiveKeys.includes(key)) {
