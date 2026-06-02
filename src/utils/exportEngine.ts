@@ -111,7 +111,7 @@ function stripCredentialHashes(settings: Partial<AppSettings>): Partial<AppSetti
 }
 
 export function exportPurifiedJSON(accounts: Account[], settings: Partial<AppSettings>): string {
-  const purified: Account[] = accounts.map(({ id: _id, ...rest }) => ({
+  const purified = accounts.map(({ id: _id, ...rest }) => ({
     ...rest,
     id: _id,
   }));
@@ -258,14 +258,14 @@ export function buildSealedPayload(accounts: Account[], settings: Partial<AppSet
 
 export function parseSealedPayload(json: string): { accounts: Account[]; settings: Partial<AppSettings> } {
   const parsed = JSON.parse(json);
-  const accounts: Account[] = (parsed.accounts || []).map((a: any) => ({
+    const accounts = (parsed.accounts || []).map((a: any) => ({
     id: a.id || createAccountId(),
     name: a.name || 'Imported',
     email: a.email || '',
     secret: (a.secret || '').toUpperCase(),
     notes: a.notes || '',
     category: a.category || 'personal',
-    isPinned: !!a.isPinned,
+    isPinned: Boolean(a.isPinned),
     logoType: a.logoType || 'custom',
     color: a.color,
     tags: a.tags || [],
@@ -305,7 +305,7 @@ function importAccountBase(item: {
     secret: item.secret.trim().toUpperCase(),
     notes: item.notes || '',
     category: item.category || 'personal',
-    isPinned: !!item.isPinned,
+    isPinned: Boolean(item.isPinned),
     logoType: (item.logoType || 'custom') as Account['logoType'],
     tags: item.tags || [],
     createdAt: new Date().toISOString(),

@@ -130,7 +130,7 @@ function getServiceHex(logoType: string): string {
 let _brandCatalog: Array<{ title: string; slug?: string; altNames?: string[]; hex?: string }> | null = null;
 
 // Common service aliases not in the catalog JSON
-const EXTRA_ALIASES: Array<{ title: string; slug: string; altNames: string[] }> = [
+const EXTRA_ALIASES = [
   { title: 'Gmail', slug: 'google', altNames: ['gmail', 'google mail', 'google workspace'] },
   { title: 'YouTube', slug: 'youtube', altNames: ['youtube', 'yt'] },
   { title: 'GitHub', slug: 'github', altNames: ['github', 'gh', 'git hub'] },
@@ -560,7 +560,7 @@ export default function App() {
 
   const [settings, setSettings] = useState<AppSettings>(() => {
     const saved = localStorage.getItem('onlyauth_settings_v3');
-    if (saved) { try { const p = JSON.parse(saved); if (p && typeof p === 'object') return { ...DEFAULT_SETTINGS, ...p }; } catch {} }
+    if (saved) { try { const p = JSON.parse(saved); if (p && typeof p === 'object') return { ...DEFAULT_SETTINGS, ...p }; } catch { /* invalid saved settings */ } }
     return DEFAULT_SETTINGS;
   });
 
@@ -648,7 +648,7 @@ export default function App() {
       if ((window as any).__TAURI__) {
         return await (window as any).__TAURI__.invoke('verify_hidden_credentials', { input });
       }
-    } catch {}
+    } catch { /* Tauri unavailable, use browser fallback */ }
     // Fallback mock logic for web environment:
     // If no hash is set, default secret is "9999" (PIN) or the master passphrase/key hash matching
     if (!settings.hiddenVaultSettings?.hash) {
@@ -685,7 +685,7 @@ export default function App() {
         customTags: prev.customTags.includes('hidden') ? prev.customTags : [...prev.customTags, 'hidden']
       }));
       setShowHiddenSetupModal(false);
-      showToast(`Isolated Compartment initialized. Type passcode in the search bar to unlock.`, 'success');
+      showToast('Isolated Compartment initialized. Type passcode in the search bar to unlock.', 'success');
     } catch (err) {
       setHiddenVaultSetupError('An error occurred during hashing.');
     }
@@ -874,7 +874,7 @@ export default function App() {
         const win = getCurrentWindow() as any;
         unlistenBlur = await win.onBlur(handleBlur);
         unlistenFocus = await win.onFocus(handleFocus);
-      } catch {}
+      } catch { /* not in Tauri environment */ }
     };
     setupTauriListeners();
 
@@ -1096,7 +1096,7 @@ export default function App() {
         if (isCurrent) { setTotpCodes({}); setTotpLoading(false); }
         return;
       }
-      const batchPayload: BatchInput[] = allAccounts.map(acc => ({
+      const batchPayload = allAccounts.map(acc => ({
         id: acc.id,
         secret: acc.secret,
         digits: acc.digits ?? 6,
@@ -1233,7 +1233,9 @@ export default function App() {
         // Dynamic inline migration to Zero-Knowledge schema if needed
         let upgradedSettings: Partial<AppSettings> = {};
         if (!settings.authHashes || !settings.authHashes.includes(matchedHash)) {
-          const cred = await createAuthCredential(input, matchedType === 'duress' ? 'duress' : matchedType, matchedType === 'duress' ? duressAction || 'fake' : undefined);
+          const cred = matchedType === 'duress'
+            ? await createAuthCredential(input, 'duress', duressAction || 'fake')
+            : await createAuthCredential(input, matchedType);
           const currentHashes = settings.authHashes || [];
           const currentMetadata = settings.authMetadata || {};
           
@@ -1244,7 +1246,7 @@ export default function App() {
         }
 
         if (matchedType === 'duress') {
-          await writeAuditLog(`DURESS AUTHENTICATION ENCOUNTERED (${method.toUpperCase()})`, undefined);
+          await writeAuditLog(`DURESS AUTHENTICATION ENCOUNTERED (${method.toUpperCase()})`);
           safeTransition(() => {
             if (duressAction === 'wipe') {
               setAccounts(prev => prev.map(a => ({ ...a, secret: '••••••••' })));
@@ -1295,13 +1297,13 @@ export default function App() {
           await new Promise(r => setTimeout(r, delayMs));
         }
 
-        await writeAuditLog(`Failed ${method} unlock attempt. Count: ${nextAttempts}`, undefined);
+        await writeAuditLog(`Failed ${method} unlock attempt. Count: ${nextAttempts}`);
 
         safeTransition(() => {
           if (method === 'pin' && nextAttempts >= 5) {
             const oldPinHash = settings.pinHash;
             let nextHashes = [...(settings.authHashes || [])];
-            let nextMetadata = { ...(settings.authMetadata || {}) };
+            const nextMetadata = { ...(settings.authMetadata || {}) };
             if (oldPinHash) {
               nextHashes = nextHashes.filter(h => h !== oldPinHash);
               delete nextMetadata[oldPinHash];
@@ -1938,7 +1940,7 @@ export default function App() {
   const focusedCodeFormatted = formatFocusedCode(focusedCode);
   const passkeyStrength = getSecurityStrength(settings.authHashes && settings.authHashes.length > 0 ? 'fortified_passphrase_length_etc' : (settings.passphraseHash || 'default'));
   const isVaultTab = !['security', 'settings', 'support'].includes(activeTag);
-  const hasModifiedChanges = !!(settings.lastModifiedDate && settings.lastBackupDate && new Date(settings.lastModifiedDate).getTime() > new Date(settings.lastBackupDate).getTime() && accounts.length > 0);
+  const hasModifiedChanges = Boolean(settings.lastModifiedDate && settings.lastBackupDate && new Date(settings.lastModifiedDate).getTime() > new Date(settings.lastBackupDate).getTime() && accounts.length > 0);
 
 
   if (isGeneratingKey) {
@@ -2127,7 +2129,7 @@ export default function App() {
 
               {/* PIN Dot Display */}
               <div className="flex gap-4 py-2 cursor-pointer relative z-20" onClick={() => {
-                const hidden = document.querySelector<HTMLInputElement>(`#setup-pin-hidden`);
+                const hidden = document.querySelector<HTMLInputElement>('#setup-pin-hidden');
                 hidden?.focus();
               }}>
                 {Array.from({ length: setupPinPhase === 'enter' ? 8 : setupPin.length }).map((_, idx) => {
@@ -2156,7 +2158,7 @@ export default function App() {
                 {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
                   <button key={num} type="button"
                     onClick={() => {
-                      const hidden = document.querySelector<HTMLInputElement>(`#setup-pin-hidden`);
+                      const hidden = document.querySelector<HTMLInputElement>('#setup-pin-hidden');
                       if (setupPinPhase === 'enter' && setupPin.length < 8) {
                         setSetupPin(prev => prev + num);
                       } else if (setupPinPhase === 'confirm' && setupPinConfirm.length < setupPin.length) {
@@ -2181,7 +2183,7 @@ export default function App() {
                 </button>
                 <button type="button"
                   onClick={() => {
-                    const hidden = document.querySelector<HTMLInputElement>(`#setup-pin-hidden`);
+                    const hidden = document.querySelector<HTMLInputElement>('#setup-pin-hidden');
                     if (setupPinPhase === 'enter' && setupPin.length < 8) {
                       setSetupPin(prev => prev + '0');
                     } else if (setupPinPhase === 'confirm' && setupPinConfirm.length < setupPin.length) {
@@ -2996,7 +2998,7 @@ export default function App() {
                           className={`glass-panel ${c ? 'rounded-xl p-2.5' : 'rounded-2xl p-4'} flex items-center justify-between cursor-pointer transition-all duration-200 ease-out group border border-transparent hover:relative hover:z-20 ${
                             isFocused
                               ? `${isHiddenVaultActive ? 'bg-amber-500/5 ring-1 ring-amber-500/20' : 'bg-white/5 ring-1 ring-white/10'}`
-                              : `hover:bg-white/[0.06] hover:border-white/10 hover:shadow-lg`
+                              : 'hover:bg-white/[0.06] hover:border-white/10 hover:shadow-lg'
                           }`}>
                           <div className="flex items-center gap-3 min-w-0 flex-1">
                             <div className="shrink-0">
@@ -3487,7 +3489,7 @@ export default function App() {
                       <select
                         value={settings.autoLockTimeout ?? 300}
                         onChange={e => setSettings(prev => ({ ...prev, autoLockTimeout: parseInt(e.target.value) }))}
-                        className={`w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-white/30 transition-all font-semibold`}
+                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-white/30 transition-all font-semibold"
                       >
                         <option value={30} className="bg-[#111] text-white">30 Seconds</option>
                         <option value={60} className="bg-[#111] text-white">1 Minute</option>

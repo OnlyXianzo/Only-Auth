@@ -57,7 +57,7 @@ function rsEncode(data: number[], eccCount: number): number[] {
 
 // Version data capacity for byte mode, ECC level M
 // [version, totalDataCodewords, eccCodewordsPerBlock, blocks]
-const VERSION_TABLE: number[][] = [
+const VERSION_TABLE = [
   [1, 16, 10, 1], [2, 28, 16, 1], [3, 44, 26, 1], [4, 64, 18, 2],
   [5, 86, 24, 2], [6, 108, 16, 4], [7, 124, 18, 4], [8, 154, 22, 4],
   [9, 172, 22, 4], [10, 192, 26, 4], [11, 224, 30, 4], [12, 260, 22, 6],
@@ -78,7 +78,7 @@ function getVersionInfo(dataLen: number): { ver: number; eccCount: number; block
 }
 
 // Format info for ECC level M, masks 0-7
-const FORMAT_INFO: number[] = [0x5C37, 0x5C26, 0x5C15, 0x5C04, 0x5D77, 0x5D46, 0x5D75, 0x5D44];
+const FORMAT_INFO = [0x5C37, 0x5C26, 0x5C15, 0x5C04, 0x5D77, 0x5D46, 0x5D75, 0x5D44];
 
 function isFunctionPattern(ver: number, row: number, col: number): boolean {
   const size = ver * 4 + 17;

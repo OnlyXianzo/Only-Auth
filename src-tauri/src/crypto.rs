@@ -388,12 +388,12 @@ mod tests {
 
     #[test]
     fn test_validate_base32_valid() {
-        assert_eq!(validate_base32("JBSWY3DPEHPK3PXP".to_string()).unwrap(), true);
+        assert!(validate_base32("JBSWY3DPEHPK3PXP".to_string()).unwrap());
     }
 
     #[test]
     fn test_validate_base32_invalid() {
-        assert_eq!(validate_base32("NOT_VALID_!!!!".to_string()).unwrap(), false);
+        assert!(!validate_base32("NOT_VALID_!!!!".to_string()).unwrap());
     }
 
     #[test]

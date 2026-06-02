@@ -68,8 +68,7 @@ export default function StarfieldBackground({ speed = 1.2 }: StarfieldProps) {
       ctx.save();
       ctx.translate(canvas.width / 2 + driftX, canvas.height / 2 + driftY);
 
-      for (let i = 0; i < stars.length; i++) {
-        const star = stars[i];
+      for (const star of stars) {
         star.z -= localSpeed;
         if (star.z <= 0) {
           star.z = canvas.width;
