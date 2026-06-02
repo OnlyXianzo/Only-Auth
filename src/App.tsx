@@ -3,7 +3,7 @@ import {
   Lock, Shield, Search, Plus, LockOpen, Briefcase,
   Edit3, Copy, Trash2, Pin, Check, X, ShieldCheck,
   Settings as SettingsIcon, RefreshCw, LogOut, AlertTriangle,
-  Fingerprint, Download, Upload, Info, Camera, Layers, Key, Keyboard,
+  Fingerprint, Download, Upload, Camera, Layers, Key, Keyboard,
   ChevronRight, Mail, Eye, EyeOff, Menu, ZoomIn, ZoomOut,
   HelpCircle, Tag
 } from 'lucide-react';
@@ -13,11 +13,11 @@ import { Account, AppSettings } from './types';
 import {
   formatCode, formatFocusedCode,
   SERVICE_COLORS, getSecurityStrength,
-  generateBatchTOTP, validateBase32, generateNewSecret,
+  generateBatchTOTP, generateNewSecret,
   loadVaultData, saveVaultData,
-  argon2idHash, argon2idVerify, secureCompare,
+  argon2idHash, argon2idVerify,
   encryptBackup, decryptBackup, writeAuditLog, readAuditLogs,
-  setWindowScreenshotProtection, encryptMetadata, decryptMetadata, exportFile, BatchInput
+  setWindowScreenshotProtection, encryptMetadata, decryptMetadata, exportFile
 } from './utils';
 import {
   exportPurifiedJSON, exportPlainTextURI, exportHTML,
@@ -620,7 +620,6 @@ export default function App() {
   const [isWindowBlurred, setIsWindowBlurred] = useState<boolean>(false);
   const [isFakeVaultActive, setIsFakeVaultActive] = useState<boolean>(false);
   const [backupPassword, setBackupPassword] = useState<string>('');
-  const [importBackupData, setImportBackupData] = useState<string>('');
   const [auditLogs, setAuditLogs] = useState<string[]>([]);
   const [showDuressSetup, setShowDuressSetup] = useState<boolean>(false);
   const [duressSetupPin, setDuressSetupPin] = useState<string>('');
@@ -1061,17 +1060,8 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  // ── Seconds remaining for display (per-account computed in render)
-  const [secondsRemaining, setSecondsRemaining] = useState(30);
-  useEffect(() => {
-    const bgInterval = settings.autoRenewInterval || 30;
-    const now = Math.floor(Date.now() / 1000) + (settings.timeOffsetSeconds || 0);
-    setSecondsRemaining(bgInterval - (now % bgInterval));
-  }, [tick, settings.autoRenewInterval, settings.timeOffsetSeconds]);
-
   // ── Batched TOTP codes from Rust backend
   const [totpCodes, setTotpCodes] = useState<Record<string, string>>({});
-  const [totpLoading, setTotpLoading] = useState(true);
 
   // ⚡ Perf: totpEpoch only changes when the TOTP time window rolls over (every ~30s),
   // not every 1-second tick. This eliminates ~29/30 batch crypto operations per period.
@@ -1093,7 +1083,7 @@ export default function App() {
     const updateTokens = async () => {
       const allAccounts = accounts.filter(a => a.secret && a.secret.trim() !== '');
       if (allAccounts.length === 0) {
-        if (isCurrent) { setTotpCodes({}); setTotpLoading(false); }
+        if (isCurrent) { setTotpCodes({}); }
         return;
       }
       const batchPayload = allAccounts.map(acc => ({
@@ -1106,7 +1096,6 @@ export default function App() {
       const freshCodes = await generateBatchTOTP(batchPayload, settings.timeOffsetSeconds || 0);
       if (isCurrent) {
         setTotpCodes(freshCodes);
-        setTotpLoading(false);
       }
     };
     updateTokens();
@@ -1940,7 +1929,6 @@ export default function App() {
   const focusedCodeFormatted = formatFocusedCode(focusedCode);
   const passkeyStrength = getSecurityStrength(settings.authHashes && settings.authHashes.length > 0 ? 'fortified_passphrase_length_etc' : (settings.passphraseHash || 'default'));
   const isVaultTab = !['security', 'settings', 'support'].includes(activeTag);
-  const hasModifiedChanges = Boolean(settings.lastModifiedDate && settings.lastBackupDate && new Date(settings.lastModifiedDate).getTime() > new Date(settings.lastBackupDate).getTime() && accounts.length > 0);
 
 
   if (isGeneratingKey) {
