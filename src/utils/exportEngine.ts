@@ -18,7 +18,6 @@ export interface ImportResult {
 
 export function accountToOTPAuthURI(acc: Account): string {
   const label = encodeURIComponent(acc.email || acc.name);
-  const issuer = encodeURIComponent(acc.name);
   const params = new URLSearchParams();
   params.set('secret', acc.secret);
   params.set('issuer', acc.name);
@@ -154,8 +153,7 @@ export function exportPlainTextURI(accounts: Account[]): string {
 export function exportHTML(accounts: Account[]): string {
   const rows = accounts
     .filter(a => a.secret?.trim())
-    .map((a, idx) => {
-      const label = encodeURIComponent(a.email || a.name);
+    .map(a => {
       const uri = accountToOTPAuthURI(a);
       const qrSvg = generateQR(uri, 4);
       const displayName = a.email ? `${escHtml(a.email)}` : escHtml(a.name);

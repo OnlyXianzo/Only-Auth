@@ -205,7 +205,6 @@ export function generateQR(text: string, moduleSize: number = 3): string {
 
   // Build data codewords
   const charCountBits = ver < 10 ? 8 : 16;
-  const totalBits = charCountBits + 4;
   const headerBits = (mode << charCountBits) | dataBytes.length;
 
   // Convert header + data to bit stream then codewords

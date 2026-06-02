@@ -112,19 +112,6 @@ const isRotationDue = (dateStr?: string) => {
   return today >= targetDate;
 };
 
-function getServiceHex(logoType: string): string {
-  const hexes: Record<string, string> = {
-    github: '#71717a',
-    google: '#3b82f6',
-    discord: '#a855f7',
-    aws: '#f97316',
-    slack: '#10b981',
-    proton: '#6366f1',
-    stripe: '#6366f1',
-    custom: '#14b8a6',
-  };
-  return hexes[logoType] || hexes['custom'];
-}
 
 // ─── Brand Catalog auto-recognition ───────────────────────────────────────────
 let _brandCatalog: Array<{ title: string; slug?: string; altNames?: string[]; hex?: string }> | null = null;
@@ -2013,7 +2000,7 @@ export default function App() {
                 <p className="text-[10px] uppercase tracking-widest font-semibold text-[#c4c5d9] mb-3">Your {setupWordCount}-Word Passphrase</p>
                 <div className="grid grid-cols-3 gap-2">
                   {setupWords.map((word, i) => (
-                    <div key={i} className="word-cell">
+                    <div key={`${i}-${word}`} className="word-cell">
                       <span className="word-index">{i + 1}.</span>
                       <span>{word}</span>
                     </div>
@@ -2125,7 +2112,7 @@ export default function App() {
                   const isFilled = currentPin.length > idx;
                   return (
                     <motion.div
-                      key={idx}
+                      key={`setup-pin-dot-${idx}`}
                       initial={{ scale: 0.8 }}
                       animate={{
                         scale: isFilled ? 1.1 : 1,
@@ -2392,7 +2379,7 @@ export default function App() {
                       const isFilled = unlockInput.length > idx;
                       return (
                         <motion.div
-                          key={idx}
+                          key={`unlock-pin-dot-${idx}`}
                           initial={{ scale: 0.8 }}
                           animate={{
                             scale: isFilled ? 1.1 : 1,
@@ -2929,7 +2916,6 @@ export default function App() {
                         {pinnedAccounts.map(acc => {
                           const pCode = totpCodes[acc.id] || '------';
                           const isSelected = focusedAccountId === acc.id;
-                          const cardColor = acc.color || getServiceHex(acc.logoType);
                           return (
                             <div key={acc.id} onClick={() => setFocusedAccountId(acc.id)}
                               className={`glass-panel ${c ? 'min-w-[200px] p-3' : 'min-w-[240px] p-4'} rounded-2xl flex flex-col gap-3 cursor-pointer transition-all duration-200 ease-out hover:bg-white/5 hover:border-white/10 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.99] shrink-0 hover:relative hover:z-20 ${
@@ -2979,7 +2965,6 @@ export default function App() {
                     {filteredAccounts.length > 0 ? filteredAccounts.map(acc => {
                       const isFocused = focusedAccountId === acc.id;
                       const aCode = totpCodes[acc.id] || '------';
-                      const cardColor = acc.color || getServiceHex(acc.logoType);
                       return (
                         <motion.div key={acc.id} onClick={() => setFocusedAccountId(acc.id)}
                           whileHover={{ scale: 1.005, y: -1 }} whileTap={{ scale: 0.99 }} transition={{ duration: 0.15, ease: "easeOut" }}
@@ -3152,8 +3137,8 @@ export default function App() {
                     { icon: Download, label: 'Backup', status: 'Stable', statusColor: 'text-green-400', desc: 'Offline backup keeps your seeds safe without cloud sync.', info: `Last: ${new Date(settings.lastBackupDate).toLocaleDateString()}`, infoColor: 'text-[var(--color-accent)]' },
                     { icon: Key, label: 'Passphrase Strength', status: passkeyStrength.label, statusColor: passkeyStrength.color, desc: 'Entropy calculated from your passphrase complexity.', info: `Score: ${passkeyStrength.score}/100`, infoColor: 'text-white' },
                     { icon: Fingerprint, label: 'Locking', status: 'Active', statusColor: 'text-green-400', desc: 'Vault locks instantly and requires passphrase, PIN, or biometrics.', info: settings.appLockEnabled ? 'App Lock Enabled' : 'App Lock Disabled', infoColor: settings.appLockEnabled ? 'text-green-400' : 'text-amber-400' },
-                  ].map((card, i) => (
-                    <div key={i} className="glass-panel p-5 rounded-2xl border border-white/8">
+                  ].map((card) => (
+                    <div key={card.label} className="glass-panel p-5 rounded-2xl border border-white/8">
                       <div className="flex justify-between items-start mb-3">
                         <div className="w-9 h-9 rounded-lg bg-[var(--color-accent)]/5 border border-[var(--color-accent)]/20 flex items-center justify-center text-[var(--color-accent)]">
                           <card.icon className="w-4 h-4" />
@@ -3307,7 +3292,7 @@ export default function App() {
 
                   <div className="bg-[#0b0a0a] rounded-xl border border-white/5 max-h-48 overflow-y-auto font-mono text-[10px] p-4 space-y-1.5 custom-scrollbar">
                     {auditLogs.length > 0 ? (
-                      [...auditLogs].reverse().map((log, i) => {
+                      [...auditLogs].reverse().map(log => {
                         const parts = log.split('|');
                         const time = new Date(parseInt(parts[0], 10) * 1000).toLocaleString();
                         const isAlert = log.includes('DURESS') || log.includes('Failed');
@@ -3605,7 +3590,7 @@ export default function App() {
                       <div className="space-y-4">
                         <div className="grid grid-cols-3 gap-2">
                           {newPassphraseWords.map((word, i) => (
-                            <div key={i} className="word-cell">
+                            <div key={`${i}-${word}`} className="word-cell">
                               <span className="word-index">{i + 1}.</span>
                               <span>{word}</span>
                             </div>
@@ -4010,7 +3995,7 @@ export default function App() {
                   <h4 className="text-xs uppercase tracking-widest text-[#8e90a2] font-semibold">Help Assistant</h4>
                   <div className="h-36 overflow-y-auto space-y-2.5 bg-black/30 p-3 rounded-xl border border-white/8 font-mono text-[11px] text-[#8e90a2]">
                     {chatMessages.map((m, i) => (
-                      <div key={i} className={m.sender === 'user' ? 'text-white text-right' : 'text-[var(--color-accent)]'}>
+                      <div key={`${i}-${m.sender}-${m.time}`} className={m.sender === 'user' ? 'text-white text-right' : 'text-[var(--color-accent)]'}>
                         <span className="text-[9px] opacity-40 mr-1">{m.time}</span>
                         <strong>{m.sender === 'user' ? 'You: ' : 'Only Auth: '}</strong>
                         <span>{m.text}</span>
