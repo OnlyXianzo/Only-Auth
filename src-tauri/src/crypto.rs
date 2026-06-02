@@ -16,20 +16,28 @@ use argon2::{
 
 
 
+/// Input payload for TOTP account generation.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountInput {
+    /// Unique identifier for the account.
     pub id: String,
+    /// Base32-encoded TOTP secret.
     pub secret: String,
+    /// Number of digits in the generated TOTP code.
     pub digits: u32,
+    /// Time period in seconds for TOTP generation.
     pub period: u64,
+    /// Optional hash algorithm override (e.g., "SHA1", "SHA256", "SHA512").
     pub algorithm: Option<String>,
 }
 
+/// Cleans a Base32 secret string for decoding.
 fn clean_secret(secret: &str) -> String {
     secret.replace([' ', '-', '\n', '\r', '='], "").to_uppercase()
 }
 
+/// Validates whether a string is a valid Base32-encoded secret.
 #[tauri::command]
 pub fn validate_base32(secret: String) -> Result<bool, String> {
     let cleaned = clean_secret(&secret);
@@ -42,12 +50,17 @@ pub fn validate_base32(secret: String) -> Result<bool, String> {
     }
 }
 
+/// Generates a random Base32-encoded TOTP secret.
 #[tauri::command]
 pub fn generate_secret() -> String {
     let secret = totp_rs::Secret::generate_secret();
     secret.to_encoded().to_string()
 }
 
+/// Generates TOTP codes for multiple accounts in batch.
+///
+/// Returns a map of account IDs to their current TOTP codes.
+/// Accounts with invalid secrets receive `"------"` as their code.
 #[tauri::command]
 pub async fn generate_totp_batch(accounts: Vec<AccountInput>, time_offset: Option<i64>) -> Result<HashMap<String, String>, String> {
     use totp_rs::{Algorithm, TOTP, Secret};
@@ -93,6 +106,9 @@ pub async fn generate_totp_batch(accounts: Vec<AccountInput>, time_offset: Optio
     Ok(results)
 }
 
+/// Hashes a password using Argon2id and returns the encoded hash string.
+///
+/// Parameters: 128MB memory, 3 iterations, 4 parallelism lanes.
 #[tauri::command]
 pub fn argon2id_hash(password: String) -> Result<String, String> {
     let salt = SaltString::generate(&mut OsRng);
@@ -109,6 +125,7 @@ pub fn argon2id_hash(password: String) -> Result<String, String> {
     Ok(password_hash)
 }
 
+/// Verifies a password against an Argon2id hash.
 #[tauri::command]
 pub fn argon2id_verify(hash: String, password: String) -> Result<bool, String> {
     let parsed_hash = match PasswordHash::new(&hash) {
@@ -119,6 +136,10 @@ pub fn argon2id_verify(hash: String, password: String) -> Result<bool, String> {
     Ok(argon2.verify_password(password.as_bytes(), &parsed_hash).is_ok())
 }
 
+/// Compares two strings in constant time to prevent timing attacks.
+///
+/// Both inputs are padded to equal length before comparison so an attacker
+/// cannot infer the secret length from response latency.
 #[tauri::command]
 pub fn secure_compare(a: String, b: String) -> bool {
     // Pad both inputs to equal length to avoid leaking string lengths via timing.
@@ -144,6 +165,10 @@ pub fn secure_compare(a: String, b: String) -> bool {
     result
 }
 
+/// Encrypts data using AES-256-GCM with a password-derived key via Argon2id.
+///
+/// Returns a payload in the format `SALT_HEX:NONCE_HEX:CIPHERTEXT_HEX`.
+/// Key derivation parameters: 128MB memory, 3 iterations, 4 lanes.
 #[tauri::command]
 pub fn encrypt_backup(data: String, password: String) -> Result<String, String> {
     use rand::RngCore;
@@ -184,6 +209,10 @@ pub fn encrypt_backup(data: String, password: String) -> Result<String, String> 
     Ok(payload)
 }
 
+/// Decrypts an AES-256-GCM backup payload using a password-derived key.
+///
+/// Accepts both legacy 4-part (`SALT:NONCE:CT:HMAC`) and current
+/// 3-part (`SALT:NONCE:CT`) formats.
 #[tauri::command]
 pub fn decrypt_backup(payload: String, password: String) -> Result<String, String> {
     // Support both legacy 4-part (SALT:NONCE:CT:HMAC) and new 3-part (SALT:NONCE:CT) formats
@@ -226,6 +255,7 @@ extern "system" {
     fn SetWindowDisplayAffinity(hwnd: *mut std::ffi::c_void, dwAffinity: u32) -> i32;
 }
 
+/// Enables or disables OS-level screenshot/screen-capture protection for the window.
 #[tauri::command]
 pub fn set_window_screenshot_protection(window: tauri::Window, protect: bool) -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -249,6 +279,7 @@ pub fn set_window_screenshot_protection(window: tauri::Window, protect: bool) ->
 }
 
 // ─── Sealed Import Gate: decrypts and strips credential hashes ────────────────
+/// Result of validating an import payload for credential/hash stripping.
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportValidationResult {
@@ -256,6 +287,9 @@ pub struct ImportValidationResult {
     pub warnings: Vec<String>,
 }
 
+/// Validates an import payload and removes sensitive credential hashes from settings.
+///
+/// Returns the deserialized accounts list along with warnings for any stripped keys.
 #[tauri::command]
 pub fn validate_import_payload(payload: String) -> Result<ImportValidationResult, String> {
     let parsed: serde_json::Value = serde_json::from_str(&payload)
@@ -288,6 +322,9 @@ pub fn validate_import_payload(payload: String) -> Result<ImportValidationResult
     Ok(ImportValidationResult { accounts, warnings })
 }
 
+/// Encrypts arbitrary metadata with a key derived via SHA-256 from `key_material`.
+///
+/// Returns `NONCE_HEX:CIPHERTEXT_HEX`.
 #[tauri::command]
 pub fn encrypt_metadata(data: String, key_material: String) -> Result<String, String> {
     use rand::RngCore;
