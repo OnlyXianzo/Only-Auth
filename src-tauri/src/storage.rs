@@ -16,20 +16,35 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct VaultAccount {
+    /// Unique identifier for the account.
     pub id: String,
+    /// Display name for the account (e.g., service or issuer name).
     pub name: String,
+    /// Email associated with the account.
     pub email: String,
+    /// Base32-encoded TOTP/HOTP secret key material.
     pub secret: String,
+    /// Freeform notes attached to the account.
     pub notes: String,
+    /// Category label for organisation and filtering.
     pub category: String,
+    /// Whether the account is pinned to the top of the list.
     pub is_pinned: bool,
+    /// Logo type identifier used for icon resolution.
     pub logo_type: String,
+    /// Optional accent colour for the account tile.
     pub color: Option<String>,
+    /// Optional list of searchable tags.
     pub tags: Option<Vec<String>>,
+    /// ISO-8601 timestamp of when the account was created.
     pub created_at: String,
+    /// Number of digits in the generated TOTP code (6, 7, or 8).
     pub digits: Option<u32>,
+    /// TOTP time-step period in seconds (commonly 30).
     pub period: Option<u64>,
+    /// Hash algorithm used for TOTP generation (SHA1, SHA256, SHA512).
     pub algorithm: Option<String>,
+    /// Optional ISO-8601 date for the next forced secret rotation.
     pub next_rotation_date: Option<String>,
 }
 
@@ -239,7 +254,7 @@ pub fn read_audit_logs(app: AppHandle, key_hex: String) -> Result<Vec<String>, S
 /// # Errors
 /// Returns an error string if the file format or extension is invalid.
 pub fn validate_export_filename(filename: &str) -> Result<String, String> {
-    let normalized_filename = filename.replace("\\", "/");
+    let normalized_filename = filename.replace('\\', "/");
     if normalized_filename.is_empty() {
         return Err("Filename cannot be empty".to_string());
     }
