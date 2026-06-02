@@ -488,3 +488,12 @@ export async function decryptMetadata(encrypted: string, keyMaterial: string): P
     throw new Error('Failed to decrypt metadata: key mismatch or corrupted data');
   }
 }
+
+export async function exportFile(filename: string, content: string): Promise<string> {
+  const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
+  if (isTauri) {
+    return await invoke<string>('export_file', { filename, content });
+  }
+  throw new Error('Tauri context unavailable');
+}
+

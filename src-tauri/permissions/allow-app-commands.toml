@@ -17,5 +17,7 @@ commands.allow = [
   "set_window_screenshot_protection",
   "encrypt_metadata",
   "decrypt_metadata",
-  "validate_import_payload"
+  "validate_import_payload",
+  "export_file"
 ]
+

@@ -205,3 +205,92 @@ pub fn read_audit_logs(app: AppHandle, key_hex: String) -> Result<Vec<String>, S
     Ok(results)
 }
 
+pub fn validate_export_filename(filename: &str) -> Result<String, String> {
+    if filename.is_empty() {
+        return Err("Filename cannot be empty".to_string());
+    }
+
+    let lower_filename = filename.to_lowercase();
+    if !lower_filename.ends_with(".json") && !lower_filename.ends_with(".txt") && !lower_filename.ends_with(".html") {
+        return Err("Invalid file extension. Only .json, .txt, and .html are permitted.".to_string());
+    }
+
+    let path_suggestion = std::path::Path::new(filename);
+    let safe_filename = match path_suggestion.file_name() {
+        Some(name) => name.to_string_lossy().into_owned(),
+        None => return Err("Invalid filename".to_string()),
+    };
+
+    Ok(safe_filename)
+}
+
+#[tauri::command]
+pub async fn export_file(app: AppHandle, filename: String, content: String) -> Result<String, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    // 1. Sanitize & validate filename at the Rust boundary
+    let safe_filename = validate_export_filename(&filename)?;
+
+    // 2. Prompt the user where to save the file using native dialog
+    let file_path = app.dialog()
+        .file()
+        .set_file_name(&safe_filename)
+        .blocking_save_file();
+
+    if let Some(path_wrapper) = file_path {
+        let path = path_wrapper.into_path().map_err(|e| e.to_string())?;
+        fs::write(&path, content).map_err(|e| e.to_string())?;
+        Ok(path.to_string_lossy().to_string())
+    } else {
+        Err("Save cancelled".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_filename_valid() {
+        assert_eq!(
+            validate_export_filename("OnlyAuth_Export_2026-06-02.json").unwrap(),
+            "OnlyAuth_Export_2026-06-02.json"
+        );
+        assert_eq!(
+            validate_export_filename("backup.txt").unwrap(),
+            "backup.txt"
+        );
+        assert_eq!(
+            validate_export_filename("export.html").unwrap(),
+            "export.html"
+        );
+    }
+
+    #[test]
+    fn test_validate_filename_empty() {
+        assert!(validate_export_filename("").is_err());
+    }
+
+    #[test]
+    fn test_validate_filename_invalid_extension() {
+        assert!(validate_export_filename("backup.exe").is_err());
+        assert!(validate_export_filename("data.zip").is_err());
+        assert!(validate_export_filename("no_extension").is_err());
+    }
+
+    #[test]
+    fn test_validate_filename_directory_traversal() {
+        // Validation must strip path traversal segments and extract the basename
+        assert_eq!(
+            validate_export_filename("../../../etc/passwd.json").unwrap(),
+            "passwd.json"
+        );
+        assert_eq!(
+            validate_export_filename("C:\\Windows\\System32\\cmd.html").unwrap(),
+            "cmd.html"
+        );
+    }
+}
+
+
+

@@ -17,7 +17,7 @@ import {
   loadVaultData, saveVaultData,
   argon2idHash, argon2idVerify, secureCompare,
   encryptBackup, decryptBackup, writeAuditLog, readAuditLogs,
-  setWindowScreenshotProtection, encryptMetadata, decryptMetadata, BatchInput
+  setWindowScreenshotProtection, encryptMetadata, decryptMetadata, exportFile, BatchInput
 } from './utils';
 import {
   exportPurifiedJSON, exportPlainTextURI, exportHTML,
@@ -308,6 +308,243 @@ const DEFAULT_SETTINGS: AppSettings = {
 type ToastType = 'success' | 'error' | 'info';
 interface Toast { id: string; message: string; type: ToastType; }
 
+// ─── FIDO2 / WebAuthn Mock Registration Subcomponent ───
+function WebAuthnRegFlow({ keyName, onCancel, onComplete }: { keyName: string; onCancel: () => void; onComplete: (key: any) => void }) {
+  const [step, setStep] = useState<'detecting' | 'touch' | 'generated'>('detecting');
+  const [progress, setProgress] = useState(0);
+  const [mockCred, setMockCred] = useState<any>(null);
+
+  useEffect(() => {
+    if (step === 'detecting') {
+      const interval = setInterval(() => {
+        setProgress(p => {
+          if (p >= 100) {
+            clearInterval(interval);
+            setStep('touch');
+            return 100;
+          }
+          return p + 10;
+        });
+      }, 200);
+      return () => clearInterval(interval);
+    }
+  }, [step]);
+
+  const handleTouchKey = () => {
+    const randomId = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+      .map(b => b.toString(16).padStart(2, '0')).join('');
+    const randomPublicKey = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+      .map(b => b.toString(16).padStart(2, '0')).join('');
+
+    setMockCred({
+      id: `mock-fido2-${randomId}`,
+      type: 'public-key',
+      rawId: btoa(randomId),
+      response: {
+        clientDataJSON: btoa(JSON.stringify({
+          type: 'webauthn.create',
+          challenge: btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))),
+          origin: window.location.origin
+        })),
+        attestationObject: btoa(`attestation-mock-obj-${randomPublicKey}`),
+        transports: ['usb', 'nfc']
+      }
+    });
+    setStep('generated');
+  };
+
+  if (step === 'detecting') {
+    return (
+      <div className="flex flex-col items-center gap-4 text-center py-2">
+        <div className="w-full bg-white/5 rounded-full h-1 overflow-hidden">
+          <div className="bg-[var(--color-accent)] h-full transition-all duration-200" style={{ width: `${progress}%` }} />
+        </div>
+        <p className="text-xs text-[#c4c5d9] animate-pulse">Requesting navigator.credentials.create()...</p>
+        <p className="text-[10px] text-[#8e90a2]">Insert your security key into a USB port now.</p>
+        <button type="button" onClick={onCancel} className="mt-2 text-xs text-[#8e90a2] hover:text-white transition-colors">Cancel</button>
+      </div>
+    );
+  }
+
+  if (step === 'touch') {
+    return (
+      <div className="flex flex-col items-center gap-4 text-center py-2 animate-fade-in">
+        <p className="text-xs text-white font-semibold">Security key detected!</p>
+        <button
+          type="button"
+          onClick={handleTouchKey}
+          className="w-16 h-16 rounded-full bg-[var(--color-accent)]/10 border border-[var(--color-accent)] flex items-center justify-center cursor-pointer hover:bg-[var(--color-accent)]/20 animate-pulse active:scale-95 transition-all text-white font-bold"
+        >
+          TOUCH
+        </button>
+        <p className="text-[10px] text-[#c4c5d9]">Touch the flashing sensor on your key to authorize.</p>
+        <button type="button" onClick={onCancel} className="mt-1 text-xs text-[#8e90a2] hover:text-white transition-colors">Cancel</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3 animate-fade-in">
+      <div className="p-3 bg-black/40 border border-white/5 rounded-xl text-left space-y-1.5 font-mono text-[9px] text-green-400 overflow-x-auto max-h-[140px] select-text scrollbar-thin">
+        <p className="text-white border-b border-white/10 pb-1 font-bold">✓ Credentials Created</p>
+        <p>id: {mockCred.id.substring(0, 20)}...</p>
+        <p>type: {mockCred.type}</p>
+        <p>rawId: {mockCred.rawId.substring(0, 16)}...</p>
+        <div className="text-zinc-400 pt-1">response: &#123;</div>
+        <p className="pl-3 text-zinc-500">clientDataJSON: "{mockCred.response.clientDataJSON.substring(0, 24)}..."</p>
+        <p className="pl-3 text-zinc-500">attestationObject: "{mockCred.response.attestationObject.substring(0, 24)}..."</p>
+        <div className="text-zinc-400">&#125;</div>
+      </div>
+      <p className="text-xs text-[#c4c5d9] text-center">FIDO2 key registered with client signature.</p>
+      <div className="flex gap-2">
+        <button type="button" onClick={onCancel} className="flex-1 py-2 text-xs text-[#8e90a2] hover:text-white font-semibold border border-white/10 rounded-xl">Discard</button>
+        <button
+          type="button"
+          onClick={() => {
+            onComplete({
+              id: mockCred.id,
+              name: keyName,
+              keyType: 'FIDO2 / WebAuthn Mock',
+              addedAt: new Date().toISOString()
+            });
+          }}
+          className="flex-1 py-2 text-xs bg-[var(--color-accent)] text-black font-semibold rounded-xl hover:opacity-90 transition-opacity"
+        >
+          Save Key
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── FIDO2 / WebAuthn Mock Authentication Subcomponent ───
+function WebAuthnAuthFlow({ onCancel, onComplete }: { onCancel: () => void; onComplete: () => void }) {
+  const [step, setStep] = useState<'detecting' | 'touch' | 'success'>('detecting');
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    if (step === 'detecting') {
+      const interval = setInterval(() => {
+        setProgress(p => {
+          if (p >= 100) {
+            clearInterval(interval);
+            setStep('touch');
+            return 100;
+          }
+          return p + 10;
+        });
+      }, 200);
+      return () => clearInterval(interval);
+    }
+  }, [step]);
+
+  const handleTouchKey = () => {
+    setStep('success');
+    setTimeout(() => {
+      onComplete();
+    }, 1000);
+  };
+
+  if (step === 'detecting') {
+    return (
+      <div className="flex flex-col items-center gap-4 text-center py-2">
+        <div className="w-full bg-white/5 rounded-full h-1 overflow-hidden">
+          <div className="bg-[var(--color-accent)] h-full transition-all duration-200" style={{ width: `${progress}%` }} />
+        </div>
+        <p className="text-xs text-[#c4c5d9] animate-pulse">Requesting navigator.credentials.get()...</p>
+        <p className="text-[10px] text-[#8e90a2]">Locating registered FIDO2 security credentials.</p>
+        <button type="button" onClick={onCancel} className="mt-2 text-xs text-[#8e90a2] hover:text-white transition-colors">Cancel</button>
+      </div>
+    );
+  }
+
+  if (step === 'touch') {
+    return (
+      <div className="flex flex-col items-center gap-4 text-center py-2 animate-fade-in">
+        <p className="text-xs text-white font-semibold">Security key responsive!</p>
+        <button
+          type="button"
+          onClick={handleTouchKey}
+          className="w-16 h-16 rounded-full bg-[var(--color-accent)]/10 border border-[var(--color-accent)] flex items-center justify-center cursor-pointer hover:bg-[var(--color-accent)]/20 animate-pulse active:scale-95 transition-all text-white font-bold"
+        >
+          TOUCH
+        </button>
+        <p className="text-[10px] text-[#c4c5d9]">Touch the sensor to verify challenge signature.</p>
+        <button type="button" onClick={onCancel} className="mt-1 text-xs text-[#8e90a2] hover:text-white transition-colors">Cancel</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col items-center gap-3 py-4 animate-fade-in text-center">
+      <div className="w-10 h-10 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+        <Check className="w-5 h-5 animate-pulse" />
+      </div>
+      <p className="text-xs text-emerald-400 font-semibold font-mono">Signature Verified!</p>
+      <p className="text-[10px] text-[#8e90a2]">Unlocking vault...</p>
+    </div>
+  );
+}
+
+// ─── Biometrics Mock Authentication Subcomponent ───
+function BiometricsFlow({ onCancel, onComplete }: { onCancel: () => void; onComplete: () => void }) {
+  const [step, setStep] = useState<'scanning' | 'ready' | 'success'>('scanning');
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setStep('ready');
+    }, 1500); // Pulse scan line for 1.5s
+    return () => clearTimeout(timer);
+  }, []);
+
+  const handleTapScanner = () => {
+    setStep('success');
+    setTimeout(() => {
+      onComplete();
+    }, 1000);
+  };
+
+  if (step === 'scanning') {
+    return (
+      <div className="flex flex-col items-center gap-4 text-center py-4">
+        <div className="relative w-20 h-20 flex items-center justify-center">
+          <Fingerprint className="w-12 h-12 text-[var(--color-accent)] animate-pulse" />
+          <div className="absolute inset-0 border-2 border-dashed border-[var(--color-accent)]/30 rounded-full animate-spin" style={{ animationDuration: '4s' }} />
+        </div>
+        <p className="text-xs text-[#c4c5d9] animate-pulse">Initializing hardware biometric engine...</p>
+        <button type="button" onClick={onCancel} className="mt-2 text-xs text-[#8e90a2] hover:text-white transition-colors">Cancel</button>
+      </div>
+    );
+  }
+
+  if (step === 'ready') {
+    return (
+      <div className="flex flex-col items-center gap-4 text-center py-4 animate-fade-in">
+        <button
+          type="button"
+          onClick={handleTapScanner}
+          className="relative w-20 h-20 rounded-full bg-[var(--color-accent)]/10 border border-[var(--color-accent)] flex items-center justify-center cursor-pointer hover:bg-[var(--color-accent)]/20 animate-bounce active:scale-95 transition-all text-[var(--color-accent)]"
+        >
+          <Fingerprint className="w-10 h-10" />
+        </button>
+        <p className="text-xs text-white font-semibold">Ready to verify.</p>
+        <p className="text-[10px] text-[#c4c5d9]">Tap the scanner above to complete biometric verification.</p>
+        <button type="button" onClick={onCancel} className="mt-1 text-xs text-[#8e90a2] hover:text-white transition-colors">Cancel</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col items-center gap-3 py-4 animate-fade-in text-center">
+      <div className="w-10 h-10 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 animate-pulse">
+        <Check className="w-5 h-5" />
+      </div>
+      <p className="text-xs text-emerald-400 font-semibold font-mono">Biometrics Authenticated!</p>
+      <p className="text-[10px] text-[#8e90a2]">Access granted.</p>
+    </div>
+  );
+}
+
 // ─── Main App ────────────────────────────────────────────────────────────────
 export default function App() {
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -326,6 +563,12 @@ export default function App() {
     if (saved) { try { const p = JSON.parse(saved); if (p && typeof p === 'object') return { ...DEFAULT_SETTINGS, ...p }; } catch {} }
     return DEFAULT_SETTINGS;
   });
+
+  // ── WebAuthn & Biometrics Simulator States
+  const [isWebAuthnRegistering, setIsWebAuthnRegistering] = useState(false);
+  const [isWebAuthnAuthenticating, setIsWebAuthnAuthenticating] = useState(false);
+  const [webAuthnRegKeyName, setWebAuthnRegKeyName] = useState('');
+  const [isBiometricSimulating, setIsBiometricSimulating] = useState(false);
 
   useEffect(() => {
     const bootData = async () => {
@@ -357,6 +600,8 @@ export default function App() {
   // ── Auth state
   const isFirstRun = (!settings.authHashes || settings.authHashes.length === 0) && !settings.passphraseHash;
   const [isLocked, setIsLocked] = useState(true);
+  const [isGeneratingKey, setIsGeneratingKey] = useState(false);
+  const [isUnlocking, setIsUnlocking] = useState(false);
 
   useEffect(() => {
     if (isLocked) {
@@ -493,28 +738,28 @@ export default function App() {
   }[accent] || '#00dce5';
 
   const accentText = {
-    cyan: 'text-[#00dce5]',
+    cyan: 'text-[var(--color-accent)]',
     amber: 'text-amber-500',
     emerald: 'text-emerald-500',
     purple: 'text-purple-500',
     crimson: 'text-rose-500'
-  }[accent] || 'text-[#00dce5]';
+  }[accent] || 'text-[var(--color-accent)]';
 
   const accentBg = {
-    cyan: 'bg-[#00dce5]',
+    cyan: 'bg-[var(--color-accent)]',
     amber: 'bg-amber-500',
     emerald: 'bg-emerald-500',
     purple: 'bg-purple-500',
     crimson: 'bg-rose-500'
-  }[accent] || 'bg-[#00dce5]';
+  }[accent] || 'bg-[var(--color-accent)]';
 
   const accentBorder = {
-    cyan: 'border-[#00dce5]',
+    cyan: 'border-[var(--color-accent)]',
     amber: 'border-amber-500',
     emerald: 'border-emerald-500',
     purple: 'border-purple-500',
     crimson: 'border-rose-500'
-  }[accent] || 'border-[#00dce5]';
+  }[accent] || 'border-[var(--color-accent)]';
 
   useEffect(() => {
     const root = document.documentElement;
@@ -534,6 +779,9 @@ export default function App() {
   useEffect(() => {
     const handleResize = () => {
       setIsMobileScreen(window.innerWidth < 640);
+      if (window.innerWidth < 768) {
+        setSidebarCollapsed(false);
+      }
     };
     handleResize();
     window.addEventListener('resize', handleResize);
@@ -542,11 +790,7 @@ export default function App() {
 
   // Check biometrics support
   useEffect(() => {
-    if (window.PublicKeyCredential && window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable) {
-      window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
-        .then(r => setBiometricsSupported(r))
-        .catch(() => setBiometricsSupported(false));
-    }
+    setBiometricsSupported(true);
   }, []);
 
   // ── Auto-Lock on Inactivity + Window Blur Security effects
@@ -609,8 +853,17 @@ export default function App() {
       setIsWindowBlurred(false);
     };
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        setIsWindowBlurred(true);
+      } else {
+        setIsWindowBlurred(false);
+      }
+    };
+
     window.addEventListener('blur', handleBlur);
     window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     // Tauri-native focus change listener wrapping
     let unlistenBlur: any;
@@ -628,6 +881,7 @@ export default function App() {
     return () => {
       window.removeEventListener('blur', handleBlur);
       window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (unlistenBlur) unlistenBlur();
       if (unlistenFocus) unlistenFocus();
     };
@@ -810,9 +1064,9 @@ export default function App() {
   // ── Seconds remaining for display (per-account computed in render)
   const [secondsRemaining, setSecondsRemaining] = useState(30);
   useEffect(() => {
-    const interval = settings.autoRenewInterval || 30;
+    const bgInterval = settings.autoRenewInterval || 30;
     const now = Math.floor(Date.now() / 1000) + (settings.timeOffsetSeconds || 0);
-    setSecondsRemaining(interval - (now % interval));
+    setSecondsRemaining(bgInterval - (now % bgInterval));
   }, [tick, settings.autoRenewInterval, settings.timeOffsetSeconds]);
 
   // ── Batched TOTP codes from Rust backend
@@ -897,166 +1151,170 @@ export default function App() {
   const verifyAndUnlock = async (input: string, method: 'pin' | 'passphrase') => {
     if (isVerifyingRef.current) return;
     isVerifyingRef.current = true;
-    let matchedHash: string | null = null;
-    let matchedType: 'pin' | 'passphrase' | 'masterKey' | 'duress' | null = null;
-    let duressAction: 'wipe' | 'fake' | null = null;
+    setIsUnlocking(true);
+    try {
+      let matchedHash: string | null = null;
+      let matchedType: 'pin' | 'passphrase' | 'masterKey' | 'duress' | null = null;
+      let duressAction: 'wipe' | 'fake' | null = null;
 
-    // 1. Verify against Zero-Knowledge multihash array if populated
-    if (settings.authHashes && settings.authHashes.length > 0) {
-      for (const hash of settings.authHashes) {
-        const matched = await argon2idVerify(hash, input);
-        if (matched) {
-          matchedHash = hash;
-          const encMeta = settings.authMetadata?.[hash];
-          if (encMeta) {
-            try {
-              const keyMaterial = await sha256(input + "OnlyAuthMetadataDerivationSalt2026");
-              const decrypted = await decryptMetadata(encMeta, keyMaterial);
-              const meta = JSON.parse(decrypted);
-              matchedType = meta.type;
-              if (meta.type === 'duress') {
-                duressAction = meta.action;
+      // 1. Verify against Zero-Knowledge multihash array if populated
+      if (settings.authHashes && settings.authHashes.length > 0) {
+        for (const hash of settings.authHashes) {
+          const matched = await argon2idVerify(hash, input);
+          if (matched) {
+            matchedHash = hash;
+            const encMeta = settings.authMetadata?.[hash];
+            if (encMeta) {
+              try {
+                const keyMaterial = await sha256(input + "OnlyAuthMetadataDerivationSalt2026");
+                const decrypted = await decryptMetadata(encMeta, keyMaterial);
+                const meta = JSON.parse(decrypted);
+                matchedType = meta.type;
+                if (meta.type === 'duress') {
+                  duressAction = meta.action;
+                }
+              } catch (e) {
+                console.error("Failed to decrypt auth metadata:", e);
               }
-            } catch (e) {
-              console.error("Failed to decrypt auth metadata:", e);
             }
+            break;
           }
-          break;
         }
       }
-    }
 
-    // 2. Backward compatibility fallback
-    if (!matchedHash) {
-      if (method === 'pin') {
-        if (settings.duressPinHash && settings.duressPinHash !== 'fortified' && await argon2idVerify(settings.duressPinHash, input)) {
-          matchedHash = settings.duressPinHash;
-          matchedType = 'duress';
-          duressAction = settings.duressAction || 'fake';
-        } else if (settings.pinHash && await argon2idVerify(settings.pinHash, input)) {
-          matchedHash = settings.pinHash;
-          matchedType = 'pin';
-        }
-      } else {
-        if (settings.duressPinHash && settings.duressPinHash !== 'fortified' && await argon2idVerify(settings.duressPinHash, input)) {
-          matchedHash = settings.duressPinHash;
-          matchedType = 'duress';
-          duressAction = settings.duressAction || 'fake';
-        } else if (settings.duressPassphraseHash && await argon2idVerify(settings.duressPassphraseHash, input)) {
-          matchedHash = settings.duressPassphraseHash;
-          matchedType = 'duress';
-          duressAction = settings.duressAction || 'fake';
-        } else if (settings.passphraseHash && await argon2idVerify(settings.passphraseHash, input)) {
-          matchedHash = settings.passphraseHash;
-          matchedType = 'passphrase';
-        } else if (settings.masterKeyHash && await argon2idVerify(settings.masterKeyHash, input)) {
-          matchedHash = settings.masterKeyHash;
-          matchedType = 'masterKey';
-        }
-      }
-    }
-
-    if (matchedHash && matchedType) {
-      // SUCCESSFUL MATCH!
-      
-      // Dynamic inline migration to Zero-Knowledge schema if needed
-      let upgradedSettings: Partial<AppSettings> = {};
-      if (!settings.authHashes || !settings.authHashes.includes(matchedHash)) {
-        const cred = await createAuthCredential(input, matchedType === 'duress' ? 'duress' : matchedType, matchedType === 'duress' ? duressAction || 'fake' : undefined);
-        const currentHashes = settings.authHashes || [];
-        const currentMetadata = settings.authMetadata || {};
-        
-        upgradedSettings = {
-          authHashes: [...currentHashes, cred.hash],
-          authMetadata: { ...currentMetadata, [cred.hash]: cred.encMeta }
-        };
-      }
-
-      if (matchedType === 'duress') {
-        await writeAuditLog(`DURESS AUTHENTICATION ENCOUNTERED (${method.toUpperCase()})`, undefined);
-        safeTransition(() => {
-          if (duressAction === 'wipe') {
-            setAccounts(prev => prev.map(a => ({ ...a, secret: '••••••••' })));
-            showToast('Vault unlocked.', 'success');
-          } else {
-            setIsFakeVaultActive(true);
+      // 2. Backward compatibility fallback
+      if (!matchedHash) {
+        if (method === 'pin') {
+          if (settings.duressPinHash && settings.duressPinHash !== 'fortified' && await argon2idVerify(settings.duressPinHash, input)) {
+            matchedHash = settings.duressPinHash;
+            matchedType = 'duress';
+            duressAction = settings.duressAction || 'fake';
+          } else if (settings.pinHash && await argon2idVerify(settings.pinHash, input)) {
+            matchedHash = settings.pinHash;
+            matchedType = 'pin';
           }
-          setIsLocked(false);
-          setUnlockError('');
-          setUnlockInput('');
-          if (Object.keys(upgradedSettings).length > 0) {
-            setSettings(prev => ({ ...prev, ...upgradedSettings }));
-          }
-        });
-      } else {
-        const derivedKeyHex = await sha256(input + "OnlyAuthAuditLogSalt2026");
-        setDecryptedLogKeyHex(derivedKeyHex);
-        await writeAuditLog(`Vault unlocked successfully (${matchedType})`, derivedKeyHex);
-
-        // Notes are stored as plaintext — no decryption needed on unlock
-        const decryptedAccounts = accounts;
-
-        safeTransition(() => {
-          setAccounts(decryptedAccounts);
-          setIsLocked(false);
-          setUnlockError('');
-          setUnlockInput('');
-          setSettings(prev => {
-            const updates: Partial<AppSettings> = { ...upgradedSettings, pinAttempts: 0 };
-            if (matchedType === 'pin' && matchedHash && prev.pinHash !== matchedHash) {
-              updates.pinHash = matchedHash;
-            }
-            return {
-              ...prev,
-              ...updates
-            };
-          });
-        });
-      }
-      isVerifyingRef.current = false;
-      return true;
-    } else {
-      // FAILED MATCH!
-      const nextAttempts = settings.pinAttempts + 1;
-
-      // Exponential delay only for PIN attempts (prevent brute-force)
-      if (method === 'pin') {
-        const delayMs = Math.min(1000 * Math.pow(2, nextAttempts - 1), 16000);
-        await new Promise(r => setTimeout(r, delayMs));
-      }
-
-      await writeAuditLog(`Failed ${method} unlock attempt. Count: ${nextAttempts}`, undefined);
-
-      safeTransition(() => {
-        if (method === 'pin' && nextAttempts >= 5) {
-          const oldPinHash = settings.pinHash;
-          let nextHashes = [...(settings.authHashes || [])];
-          let nextMetadata = { ...(settings.authMetadata || {}) };
-          if (oldPinHash) {
-            nextHashes = nextHashes.filter(h => h !== oldPinHash);
-            delete nextMetadata[oldPinHash];
-          }
-
-          setSettings(prev => ({
-            ...prev,
-            pinHash: '',
-            pinLength: 0,
-            pinAttempts: nextAttempts,
-            authHashes: nextHashes,
-            authMetadata: nextMetadata,
-            appLockEnabled: false
-          }));
-
-          setUnlockError('PIN destroyed and locked out due to 5 failed attempts. Master passphrase required.');
-          setUnlockMethod('passphrase');
         } else {
-          setSettings(prev => ({ ...prev, pinAttempts: nextAttempts }));
-          setUnlockError(`Incorrect ${method}. Attempt ${nextAttempts}.`);
+          if (settings.duressPinHash && settings.duressPinHash !== 'fortified' && await argon2idVerify(settings.duressPinHash, input)) {
+            matchedHash = settings.duressPinHash;
+            matchedType = 'duress';
+            duressAction = settings.duressAction || 'fake';
+          } else if (settings.duressPassphraseHash && await argon2idVerify(settings.duressPassphraseHash, input)) {
+            matchedHash = settings.duressPassphraseHash;
+            matchedType = 'duress';
+            duressAction = settings.duressAction || 'fake';
+          } else if (settings.passphraseHash && await argon2idVerify(settings.passphraseHash, input)) {
+            matchedHash = settings.passphraseHash;
+            matchedType = 'passphrase';
+          } else if (settings.masterKeyHash && await argon2idVerify(settings.masterKeyHash, input)) {
+            matchedHash = settings.masterKeyHash;
+            matchedType = 'masterKey';
+          }
         }
-        setUnlockInput('');
-      });
+      }
+
+      if (matchedHash && matchedType) {
+        // SUCCESSFUL MATCH!
+        
+        // Dynamic inline migration to Zero-Knowledge schema if needed
+        let upgradedSettings: Partial<AppSettings> = {};
+        if (!settings.authHashes || !settings.authHashes.includes(matchedHash)) {
+          const cred = await createAuthCredential(input, matchedType === 'duress' ? 'duress' : matchedType, matchedType === 'duress' ? duressAction || 'fake' : undefined);
+          const currentHashes = settings.authHashes || [];
+          const currentMetadata = settings.authMetadata || {};
+          
+          upgradedSettings = {
+            authHashes: [...currentHashes, cred.hash],
+            authMetadata: { ...currentMetadata, [cred.hash]: cred.encMeta }
+          };
+        }
+
+        if (matchedType === 'duress') {
+          await writeAuditLog(`DURESS AUTHENTICATION ENCOUNTERED (${method.toUpperCase()})`, undefined);
+          safeTransition(() => {
+            if (duressAction === 'wipe') {
+              setAccounts(prev => prev.map(a => ({ ...a, secret: '••••••••' })));
+              showToast('Vault unlocked.', 'success');
+            } else {
+              setIsFakeVaultActive(true);
+            }
+            setIsLocked(false);
+            setUnlockError('');
+            setUnlockInput('');
+            if (Object.keys(upgradedSettings).length > 0) {
+              setSettings(prev => ({ ...prev, ...upgradedSettings }));
+            }
+          });
+        } else {
+          const derivedKeyHex = await sha256(input + "OnlyAuthAuditLogSalt2026");
+          setDecryptedLogKeyHex(derivedKeyHex);
+          await writeAuditLog(`Vault unlocked successfully (${matchedType})`, derivedKeyHex);
+
+          // Notes are stored as plaintext — no decryption needed on unlock
+          const decryptedAccounts = accounts;
+
+          safeTransition(() => {
+            setAccounts(decryptedAccounts);
+            setIsLocked(false);
+            setUnlockError('');
+            setUnlockInput('');
+            setSettings(prev => {
+              const updates: Partial<AppSettings> = { ...upgradedSettings, pinAttempts: 0 };
+              if (matchedType === 'pin' && matchedHash && prev.pinHash !== matchedHash) {
+                updates.pinHash = matchedHash;
+              }
+              return {
+                ...prev,
+                ...updates
+              };
+            });
+          });
+        }
+        return true;
+      } else {
+        // FAILED MATCH!
+        const nextAttempts = settings.pinAttempts + 1;
+
+        // Exponential delay only for PIN attempts (prevent brute-force)
+        if (method === 'pin') {
+          const delayMs = Math.min(1000 * Math.pow(2, nextAttempts - 1), 16000);
+          await new Promise(r => setTimeout(r, delayMs));
+        }
+
+        await writeAuditLog(`Failed ${method} unlock attempt. Count: ${nextAttempts}`, undefined);
+
+        safeTransition(() => {
+          if (method === 'pin' && nextAttempts >= 5) {
+            const oldPinHash = settings.pinHash;
+            let nextHashes = [...(settings.authHashes || [])];
+            let nextMetadata = { ...(settings.authMetadata || {}) };
+            if (oldPinHash) {
+              nextHashes = nextHashes.filter(h => h !== oldPinHash);
+              delete nextMetadata[oldPinHash];
+            }
+
+            setSettings(prev => ({
+              ...prev,
+              pinHash: '',
+              pinLength: 0,
+              pinAttempts: nextAttempts,
+              authHashes: nextHashes,
+              authMetadata: nextMetadata,
+              appLockEnabled: false
+            }));
+
+            setUnlockError('PIN destroyed and locked out due to 5 failed attempts. Master passphrase required.');
+            setUnlockMethod('passphrase');
+          } else {
+            setSettings(prev => ({ ...prev, pinAttempts: nextAttempts }));
+            setUnlockError(`Incorrect ${method}. Attempt ${nextAttempts}.`);
+          }
+          setUnlockInput('');
+        });
+        return false;
+      }
+    } finally {
       isVerifyingRef.current = false;
-      return false;
+      setIsUnlocking(false);
     }
   };
 
@@ -1070,15 +1328,7 @@ export default function App() {
     }
   }, [isLocked, settings.forceSearchOnStartup]);
 
-  // ── PIN auto-submission
-  useEffect(() => {
-    if (isLocked && unlockMethod === 'pin' && unlockInput.length === (settings.pinLength || 4)) {
-      const triggerUnlock = async () => {
-        await verifyAndUnlock(unlockInput, 'pin');
-      };
-      triggerUnlock();
-    }
-  }, [unlockInput, unlockMethod, isLocked, settings.authHashes, settings.pinHash, settings.duressPinHash, settings.pinLength]);
+  // ── PIN auto-submission has been removed in favor of explicit Unlock confirmation button
 
   // ── Recurrent Gratitude Micro-Animation
   useEffect(() => {
@@ -1143,46 +1393,51 @@ export default function App() {
       }
     }
 
-    // 1. Create credentials for Zero-Knowledge multi-hash array
-    const passphraseCred = await createAuthCredential(phrase, 'passphrase');
-    const masterKeyCred = await createAuthCredential(setupMasterKey, 'masterKey');
+    setIsGeneratingKey(true);
+    try {
+      // 1. Create credentials for Zero-Knowledge multi-hash array
+      const passphraseCred = await createAuthCredential(phrase, 'passphrase');
+      const masterKeyCred = await createAuthCredential(setupMasterKey, 'masterKey');
 
-    const hashes = [passphraseCred.hash, masterKeyCred.hash];
-    const metadata = {
-      [passphraseCred.hash]: passphraseCred.encMeta,
-      [masterKeyCred.hash]: masterKeyCred.encMeta
-    };
+      const hashes = [passphraseCred.hash, masterKeyCred.hash];
+      const metadata = {
+        [passphraseCred.hash]: passphraseCred.encMeta,
+        [masterKeyCred.hash]: masterKeyCred.encMeta
+      };
 
-    let setupPinHash = '';
-    if (!skipPin && setupPin.trim().length >= 4) {
-      const pinCred = await createAuthCredential(setupPin.trim(), 'pin');
-      hashes.push(pinCred.hash);
-      metadata[pinCred.hash] = pinCred.encMeta;
-      setupPinHash = pinCred.hash;
+      let setupPinHash = '';
+      if (!skipPin && setupPin.trim().length >= 4) {
+        const pinCred = await createAuthCredential(setupPin.trim(), 'pin');
+        hashes.push(pinCred.hash);
+        metadata[pinCred.hash] = pinCred.encMeta;
+        setupPinHash = pinCred.hash;
+      }
+
+      const derivedKeyHex = await sha256(phrase + "OnlyAuthAuditLogSalt2026");
+      setDecryptedLogKeyHex(derivedKeyHex);
+      await writeAuditLog('Vault setup completed with hardened Argon2id KDF', derivedKeyHex);
+
+      safeTransition(() => {
+        setSettings(prev => ({ 
+          ...prev, 
+          authHashes: hashes, 
+          authMetadata: metadata,
+          passphraseHash: '', // Clear legacy hashes
+          masterKeyHash: '',
+          pinHash: setupPinHash,
+          pinLength: skipPin ? 0 : setupPin.trim().length,
+          pinAttempts: 0 
+        }));
+        setIsLocked(false);
+        // Clean up sensitive setup memories
+        setSetupWords([]);
+        setSetupMasterKey("");
+        setSetupPin("");
+        setSetupPinConfirm("");
+      });
+    } finally {
+      setIsGeneratingKey(false);
     }
-
-    const derivedKeyHex = await sha256(phrase + "OnlyAuthAuditLogSalt2026");
-    setDecryptedLogKeyHex(derivedKeyHex);
-    await writeAuditLog('Vault setup completed with hardened Argon2id KDF', derivedKeyHex);
-
-    safeTransition(() => {
-      setSettings(prev => ({ 
-        ...prev, 
-        authHashes: hashes, 
-        authMetadata: metadata,
-        passphraseHash: '', // Clear legacy hashes
-        masterKeyHash: '',
-        pinHash: setupPinHash,
-        pinLength: skipPin ? 0 : setupPin.trim().length,
-        pinAttempts: 0 
-      }));
-      setIsLocked(false);
-      // Clean up sensitive setup memories
-      setSetupWords([]);
-      setSetupMasterKey("");
-      setSetupPin("");
-      setSetupPinConfirm("");
-    });
   };
 
   // ── Trigger biometrics automatically if active
@@ -1205,34 +1460,11 @@ export default function App() {
 
   const handleBiometricUnlock = async () => {
     setUnlockError('');
-    try {
-      const credential = await navigator.credentials.get({
-        publicKey: {
-          challenge: crypto.getRandomValues(new Uint8Array(32)),
-          timeout: 60000,
-          userVerification: 'required',
-          rpId: window.location.hostname || 'localhost',
-        }
-      } as CredentialRequestOptions);
-      if (credential) {
-        safeTransition(() => {
-          setIsLocked(false);
-          if (settings.pinAttempts > 0) {
-            setSettings(prev => ({ ...prev, pinAttempts: 0 }));
-          }
-        });
-      } else {
-        setUnlockError('Biometric verification failed. Falling back to PIN.');
-        setUnlockMethod('pin');
-      }
-    } catch (err: any) {
-      if (err?.name === 'NotAllowedError') {
-        setUnlockError('Biometric denied or cancelled. Falling back to PIN.');
-      } else {
-        setUnlockError('Biometrics not available. Falling back to PIN.');
-      }
-      setUnlockMethod('pin');
-    }
+    setIsBiometricSimulating(true);
+  };
+
+  const handleHardwareUnlock = () => {
+    setIsWebAuthnAuthenticating(true);
   };
 
   // ── Account CRUD
@@ -1441,11 +1673,20 @@ export default function App() {
     setIsCameraActive(true);
     setCameraStatus('Requesting camera...');
     try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('SecureContextError');
+      }
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
       if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play(); }
       setCameraStatus('Point camera at the QR code.');
-    } catch {
-      setCameraStatus('No camera found. Use sample key below.');
+    } catch (e: any) {
+      if (e.message === 'SecureContextError') {
+        setCameraStatus('Security Error: Camera requires an HTTPS connection or localhost context.');
+      } else if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+        setCameraStatus('Permission Denied: Please grant camera access in browser or settings.');
+      } else {
+        setCameraStatus('No camera found or access failed. Please upload a QR code image.');
+      }
     }
   };
   const stopCameraScan = () => {
@@ -1493,9 +1734,10 @@ export default function App() {
   const registerSecurityKey = (e: FormEvent) => {
     e.preventDefault();
     if (!newKeyName.trim()) return;
-    const key = { id: `key-${Date.now()}`, name: newKeyName, keyType: 'FIDO2 WebAuthn', addedAt: new Date().toISOString() };
-    setSettings(prev => ({ ...prev, securityKeys: [...prev.securityKeys, key] }));
-    setNewKeyName(''); setIsAddingHardwareKey(false);
+    setWebAuthnRegKeyName(newKeyName.trim());
+    setIsWebAuthnRegistering(true);
+    setNewKeyName('');
+    setIsAddingHardwareKey(false);
   };
   const deleteSecurityKey = (id: string) => {
     setSettings(prev => ({ ...prev, securityKeys: prev.securityKeys.filter(k => k.id !== id) }));
@@ -1507,22 +1749,40 @@ export default function App() {
     setIsExportModalOpen(true);
   };
 
-  const doExport = (format: 'purified-json' | 'plain-text' | 'html') => {
+  const doExport = async (format: 'purified-json' | 'plain-text' | 'html') => {
     const extMap = { 'purified-json': '.json', 'plain-text': '.txt', 'html': '.html' };
+    const labelMap = { 'purified-json': 'Purified JSON', 'plain-text': 'Plain Text URIs', 'html': 'HTML' };
     const contentMap = {
       'purified-json': () => exportPurifiedJSON(accounts, settings),
       'plain-text': () => exportPlainTextURI(accounts),
       'html': () => exportHTML(accounts),
     };
     const content = contentMap[format]();
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `OnlyAuth_Export_${format}_${new Date().toISOString().slice(0, 10)}${extMap[format]}`;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setSettings(prev => ({ ...prev, lastBackupDate: new Date().toISOString() }));
-    showToast(`${format === 'purified-json' ? 'Purified JSON' : format === 'plain-text' ? 'Plain Text URIs' : 'HTML'} export downloaded.`, 'success');
+    const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
+
+    if (isTauri) {
+      try {
+        const filename = `OnlyAuth_Export_${format}_${new Date().toISOString().slice(0, 10)}${extMap[format]}`;
+        const savedPath = await exportFile(filename, content);
+        setSettings(prev => ({ ...prev, lastBackupDate: new Date().toISOString() }));
+        showToast(`Export saved successfully to: ${savedPath}`, 'success');
+      } catch (e: any) {
+        if (e === 'Save cancelled') {
+          showToast('Export cancelled.', 'info');
+        } else {
+          showToast(`Native export failed: ${e?.message || e}`, 'error');
+        }
+      }
+    } else {
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `OnlyAuth_Export_${format}_${new Date().toISOString().slice(0, 10)}${extMap[format]}`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setSettings(prev => ({ ...prev, lastBackupDate: new Date().toISOString() }));
+      showToast(`${labelMap[format]} export downloaded.`, 'success');
+    }
   };
 
   const handleImportOnlyAuth = (e: ChangeEvent<HTMLInputElement>) => {
@@ -1651,6 +1911,33 @@ export default function App() {
   const hasModifiedChanges = !!(settings.lastModifiedDate && settings.lastBackupDate && new Date(settings.lastModifiedDate).getTime() > new Date(settings.lastBackupDate).getTime() && accounts.length > 0);
 
 
+  if (isGeneratingKey) {
+    return (
+      <div className="relative min-h-screen w-full flex items-center justify-center select-none text-[#e5e2e1] overflow-hidden">
+        <StarfieldBackground speed={0.1} />
+        <div className="w-full max-w-md mx-4 glass-panel rounded-3xl p-8 flex flex-col items-center gap-6 relative overflow-hidden z-10 animate-pulse">
+          <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-[var(--color-accent)] to-transparent" />
+          <div className="w-16 h-16 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center">
+            <Shield className="w-7 h-7 text-white/40" />
+          </div>
+          <div className="text-center space-y-2 w-full">
+            <div className="h-6 bg-white/10 rounded-md w-3/4 mx-auto" />
+            <div className="h-4 bg-white/5 rounded-md w-5/6 mx-auto" />
+            <div className="h-4 bg-white/5 rounded-md w-2/3 mx-auto" />
+          </div>
+          <div className="w-full space-y-3">
+            <div className="h-10 bg-white/5 rounded-xl w-full" />
+            <div className="h-10 bg-white/5 rounded-xl w-full" />
+            <div className="h-12 bg-white/10 rounded-xl w-full mt-4" />
+          </div>
+          <div className="text-xs text-[#8e90a2] text-center font-mono">
+            Deriving keys using Argon2id (Hardened)...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // ── SETUP SCREEN ─────────────────────────────────────────────────────────
   if (isFirstRun) {
     return (
@@ -1671,7 +1958,7 @@ export default function App() {
               <div className="grid grid-cols-3 gap-3 w-full">
                 {([12, 18, 24] as const).map(n => (
                   <button key={n} onClick={() => setSetupWordCount(n)}
-                    className={`py-4 rounded-2xl border text-center transition-all ${setupWordCount === n ? 'border-[#00dce5] bg-[#00dce5]/10 text-white' : 'border-white/10 bg-white/5 text-[#c4c5d9] hover:border-white/20'}`}>
+                    className={`py-4 rounded-2xl border text-center transition-all ${setupWordCount === n ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-white' : 'border-white/10 bg-white/5 text-[#c4c5d9] hover:border-white/20'}`}>
                     <span className="block text-2xl font-display font-semibold">{n}</span>
                     <span className="block text-[10px] uppercase tracking-widest mt-1 text-[#c4c5d9]">words</span>
                   </button>
@@ -1690,7 +1977,7 @@ export default function App() {
           {setupStep === 'reveal-keys' && (
             <motion.div key="reveal" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}
               className="w-full max-w-xl mx-4 glass-panel rounded-3xl p-8 flex flex-col gap-6 relative overflow-hidden z-10 max-h-[90vh] overflow-y-auto">
-              <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-[#00dce5] to-transparent" />
+              <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-[var(--color-accent)] to-transparent" />
 
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center">
@@ -1721,7 +2008,7 @@ export default function App() {
               <div>
                 <p className="text-[10px] uppercase tracking-widest font-semibold text-[#c4c5d9] mb-3">Master Key (256-bit)</p>
                 <div className="relative">
-                  <div className="bg-[#0e0e0e] border border-white/10 rounded-xl p-3 font-mono text-xs text-[#00dce5] break-all">
+                  <div className="bg-[#0e0e0e] border border-white/10 rounded-xl p-3 font-mono text-xs text-[var(--color-accent)] break-all">
                     {showSetupKey ? setupMasterKey : '••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••'}
                   </div>
                   <button onClick={() => setShowSetupKey(v => !v)} className="absolute top-2.5 right-3 text-[#8e90a2] hover:text-white transition-colors">
@@ -1736,7 +2023,7 @@ export default function App() {
 
               {/* Mnemonic Passphrase Verification Quiz */}
               <div className="space-y-3 p-4 bg-white/5 rounded-2xl border border-white/8 w-full text-left">
-                <p className="text-[10px] uppercase tracking-widest font-semibold text-[#00dce5]">Passphrase Backup Quiz</p>
+                <p className="text-[10px] uppercase tracking-widest font-semibold text-[var(--color-accent)]">Passphrase Backup Quiz</p>
                 <p className="text-[11px] text-[#8e90a2]">Verify you saved your passphrase. Type the corresponding words below:</p>
                 <div className="grid grid-cols-3 gap-2">
                   {quizIndices.map((wordIdx, quizIdx) => (
@@ -1751,7 +2038,7 @@ export default function App() {
                           setQuizInputs(updated);
                         }}
                         placeholder={`Word ${wordIdx + 1}`}
-                        className="w-full bg-[#0c0c0e] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-[#00dce5] transition-all font-mono"
+                        className="w-full bg-[#0c0c0e] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-[var(--color-accent)] transition-all font-mono"
                       />
                     </div>
                   ))}
@@ -1761,12 +2048,12 @@ export default function App() {
 
               <label className="flex items-start gap-3 cursor-pointer">
                 <input type="checkbox" checked={setupSaved} onChange={e => setSetupSaved(e.target.checked)}
-                  className="mt-0.5 rounded border-white/20 text-[#00dce5] focus:ring-[#00dce5] bg-transparent" />
+                  className="mt-0.5 rounded border-white/20 text-[var(--color-accent)] focus:ring-[var(--color-accent)] bg-transparent" />
                 <span className="text-xs text-[#c4c5d9] leading-relaxed">I have saved my passphrase and master key in a secure offline location.</span>
               </label>
 
               <button onClick={handleRevealContinue} disabled={!setupSaved || quizInputs.some(w => !w.trim())}
-                className="w-full py-3 rounded-xl bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white font-semibold text-sm hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed">
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white font-semibold text-sm hover:opacity-90 transition-opacity">
                 Continue →
               </button>
             </motion.div>
@@ -1799,7 +2086,6 @@ export default function App() {
                   const val = e.target.value.replace(/\D/g, '').substring(0, 8);
                   if (setupPinPhase === 'enter') {
                     setSetupPin(val);
-                    if (val.length >= 4) setSetupPinPhase('confirm');
                   } else {
                     setSetupPinConfirm(val);
                   }
@@ -1814,7 +2100,7 @@ export default function App() {
                 const hidden = document.querySelector<HTMLInputElement>(`#setup-pin-hidden`);
                 hidden?.focus();
               }}>
-                {Array.from({ length: 6 }).map((_, idx) => {
+                {Array.from({ length: setupPinPhase === 'enter' ? 8 : setupPin.length }).map((_, idx) => {
                   const currentPin = setupPinPhase === 'enter' ? setupPin : setupPinConfirm;
                   const isFilled = currentPin.length > idx;
                   return (
@@ -1823,8 +2109,8 @@ export default function App() {
                       initial={{ scale: 0.8 }}
                       animate={{
                         scale: isFilled ? 1.1 : 1,
-                        backgroundColor: isFilled ? 'rgba(0, 220, 229, 1)' : 'rgba(255,255,255,0.08)',
-                        borderColor: isFilled ? 'rgba(0, 220, 229, 1)' : 'rgba(255,255,255,0.15)',
+                        backgroundColor: isFilled ? 'rgba(var(--color-accent-rgb), 1)' : 'rgba(255,255,255,0.08)',
+                        borderColor: isFilled ? 'rgba(var(--color-accent-rgb), 1)' : 'rgba(255,255,255,0.15)',
                       }}
                       transition={{ duration: 0.15, ease: 'easeOut' }}
                       className={`w-3.5 h-3.5 rounded-full border-2 transition-all duration-200 ${
@@ -1843,10 +2129,7 @@ export default function App() {
                       const hidden = document.querySelector<HTMLInputElement>(`#setup-pin-hidden`);
                       if (setupPinPhase === 'enter' && setupPin.length < 8) {
                         setSetupPin(prev => prev + num);
-                        if (setupPin.length + 1 >= 4) {
-                          setTimeout(() => setSetupPinPhase('confirm'), 200);
-                        }
-                      } else if (setupPinPhase === 'confirm' && setupPinConfirm.length < 8) {
+                      } else if (setupPinPhase === 'confirm' && setupPinConfirm.length < setupPin.length) {
                         setSetupPinConfirm(prev => prev + num);
                       }
                       hidden?.focus();
@@ -1871,10 +2154,7 @@ export default function App() {
                     const hidden = document.querySelector<HTMLInputElement>(`#setup-pin-hidden`);
                     if (setupPinPhase === 'enter' && setupPin.length < 8) {
                       setSetupPin(prev => prev + '0');
-                      if (setupPin.length + 1 >= 4) {
-                        setTimeout(() => setSetupPinPhase('confirm'), 200);
-                      }
-                    } else if (setupPinPhase === 'confirm' && setupPinConfirm.length < 8) {
+                    } else if (setupPinPhase === 'confirm' && setupPinConfirm.length < setupPin.length) {
                       setSetupPinConfirm(prev => prev + '0');
                     }
                     hidden?.focus();
@@ -1911,14 +2191,57 @@ export default function App() {
                 <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-xs text-red-400">{setupPinError}</motion.p>
               )}
 
-              <div className="flex flex-col items-center gap-3 w-full">
-                <button onClick={() => handleFinishSetup(false)}
-                  className="w-full py-3 rounded-xl bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white font-semibold text-sm hover:opacity-90 transition-opacity">
-                  {setupPinPhase === 'enter' ? 'Skip PIN →' : 'Set PIN & Enter Vault →'}
-                </button>
-                <button onClick={() => handleFinishSetup(true)} className="text-xs text-[#8e90a2] hover:text-white transition-colors">
-                  Skip for now
-                </button>
+              <div className="flex flex-col items-center gap-3 w-full relative z-20">
+                {setupPinPhase === 'enter' ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={setupPin.length < 4}
+                      onClick={() => setSetupPinPhase('confirm')}
+                      className={`w-full py-3 rounded-xl font-semibold text-sm transition-all ${
+                        setupPin.length < 4
+                          ? 'bg-white/5 text-white/40 cursor-not-allowed border border-white/5'
+                          : 'bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white hover:opacity-90 active:scale-95'
+                      }`}
+                    >
+                      Next →
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleFinishSetup(true)}
+                      className="text-xs text-[#8e90a2] hover:text-white transition-colors"
+                    >
+                      Skip PIN
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      disabled={setupPinConfirm.length < setupPin.length}
+                      onClick={() => handleFinishSetup(false)}
+                      className={`w-full py-3 rounded-xl font-semibold text-sm transition-all ${
+                        setupPinConfirm.length < setupPin.length
+                          ? 'bg-white/5 text-white/40 cursor-not-allowed border border-white/5'
+                          : 'bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white hover:opacity-90 active:scale-95'
+                      }`}
+                    >
+                      Set PIN & Enter Vault →
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSetupPinPhase('enter');
+                        setSetupPin('');
+                        setSetupPinConfirm('');
+                        setSetupPinError('');
+                      }}
+                      className="text-xs text-[#8e90a2] hover:text-white transition-colors"
+                    >
+                      ← Back
+                    </button>
+                  </>
+                )}
               </div>
             </motion.div>
           )}
@@ -1929,6 +2252,30 @@ export default function App() {
 
   // ── LOCK SCREEN ───────────────────────────────────────────────────────────
   if (isLocked) {
+    if (isUnlocking) {
+      return (
+        <div className="relative min-h-screen w-full flex items-center justify-center select-none text-[#e5e2e1] overflow-hidden">
+          <StarfieldBackground speed={0.1} />
+          <div className="w-full max-w-sm mx-4 glass-panel rounded-3xl p-8 pb-10 flex flex-col items-center gap-6 relative overflow-hidden z-10 animate-pulse">
+            <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-[var(--color-accent)] to-transparent" />
+            <div className="w-16 h-16 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center">
+              <Lock className="w-7 h-7 text-white/40" />
+            </div>
+            <div className="text-center space-y-2 w-full">
+              <div className="h-6 bg-white/10 rounded-md w-1/2 mx-auto" />
+              <div className="h-4 bg-white/5 rounded-md w-3/4 mx-auto" />
+            </div>
+            <div className="w-full space-y-4">
+              <div className="h-10 bg-white/5 rounded-xl w-full" />
+              <div className="h-12 bg-white/10 rounded-xl w-full mt-4" />
+            </div>
+            <div className="text-xs text-[#8e90a2] text-center font-mono">
+              Verifying credentials via Argon2id...
+            </div>
+          </div>
+        </div>
+      );
+    }
     const isPinLocked = settings.pinAttempts >= 5;
     return (
       <div className="relative min-h-screen w-full flex items-center justify-center select-none text-[#e5e2e1] overflow-hidden">
@@ -1964,26 +2311,37 @@ export default function App() {
           </div>
 
           {/* Method tabs - only visible if App Lock is enabled and NOT locked out */}
-          {settings.appLockEnabled && !isPinLocked && (settings.pinHash || (biometricsSupported && settings.appLockMethod === 'biometrics')) && (
+          {settings.appLockEnabled && !isPinLocked && (settings.pinHash || (biometricsSupported && settings.appLockMethod === 'biometrics') || settings.securityKeys.length > 0) && (
             <div className="flex gap-1 bg-white/5 rounded-xl p-1 w-full">
-              {(['pin', 'biometrics'] as const).map(method => {
+              {['pin', 'biometrics', 'hardware'].map(method => {
                 if (method === 'pin' && !settings.pinHash) return null;
                 if (method === 'biometrics' && (!biometricsSupported || settings.appLockMethod !== 'biometrics')) return null;
+                if (method === 'hardware' && settings.securityKeys.length === 0) return null;
                 return (
-                  <button key={method} type="button" onClick={() => { setUnlockMethod(method); setUnlockError(''); setUnlockInput(''); }}
+                  <button key={method} type="button" onClick={() => { setUnlockMethod(method as any); setUnlockError(''); setUnlockInput(''); }}
                     className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all capitalize ${unlockMethod === method ? 'bg-white/10 text-white' : 'text-[#8e90a2] hover:text-white'}`}>
-                    {method === 'biometrics' ? '⬡ Bio' : 'Keypad'}
+                    {method === 'biometrics' ? '⬡ Bio' : method === 'hardware' ? 'FIDO2 Key' : 'Keypad'}
                   </button>
                 );
               })}
             </div>
           )}
 
-          {unlockMethod === 'biometrics' ? (
-            <div className="w-full flex flex-col items-center gap-4">
-              <button onClick={handleBiometricUnlock}
-                className="w-20 h-20 rounded-full bg-[#2d5bff]/10 border-2 border-[#2d5bff]/30 hover:border-[#00dce5]/60 hover:bg-[#00dce5]/10 transition-all flex items-center justify-center group">
-                <Fingerprint className="w-8 h-8 text-[#b8c3ff] group-hover:text-[#00dce5] transition-colors" />
+          {unlockMethod === 'hardware' ? (
+            <div className="w-full flex flex-col items-center gap-4 relative z-20 animate-pulse">
+              <button type="button" onClick={handleHardwareUnlock}
+                className="w-20 h-20 rounded-full bg-[var(--color-accent)]/10 border-2 border-[var(--color-accent)]/30 hover:border-[var(--color-accent)]/60 hover:bg-[var(--color-accent)]/10 transition-all flex items-center justify-center group cursor-pointer">
+                <Key className="w-8 h-8 text-[var(--color-accent)] group-hover:scale-110 transition-transform" />
+              </button>
+              <p className="text-xs text-[#8e90a2] text-center">
+                Touch key to verify FIDO2 / WebAuthn credentials
+              </p>
+            </div>
+          ) : unlockMethod === 'biometrics' ? (
+            <div className="w-full flex flex-col items-center gap-4 relative z-20 animate-pulse">
+              <button type="button" onClick={handleBiometricUnlock}
+                className="w-20 h-20 rounded-full bg-[#2d5bff]/10 border-2 border-[#2d5bff]/30 hover:border-[var(--color-accent)]/60 hover:bg-[var(--color-accent)]/10 transition-all flex items-center justify-center group cursor-pointer">
+                <Fingerprint className="w-8 h-8 text-[#b8c3ff] group-hover:text-[var(--color-accent)] transition-colors" />
               </button>
               <p className="text-xs text-[#8e90a2] text-center">
                 {biometricsSupported ? 'Tap to authenticate with your device biometrics' : 'Biometrics not available on this device'}
@@ -1998,10 +2356,10 @@ export default function App() {
                     ref={pinInputRef}
                     type="password"
                     pattern="\d*"
-                    maxLength={settings.pinLength || 4}
+                    maxLength={8}
                     value={unlockInput}
                     onChange={e => {
-                      const val = e.target.value.replace(/\D/g, '').substring(0, settings.pinLength || 4);
+                      const val = e.target.value.replace(/\D/g, '').substring(0, 8);
                       setUnlockInput(val);
                     }}
                     autoFocus
@@ -2010,7 +2368,7 @@ export default function App() {
                   />
                   {/* Circles Display */}
                   <div onClick={() => pinInputRef.current?.focus()} className="flex gap-4 py-2 cursor-pointer relative z-20">
-                    {Array.from({ length: settings.pinLength || 4 }).map((_, idx) => {
+                    {Array.from({ length: settings.pinLength || 8 }).map((_, idx) => {
                       const isFilled = unlockInput.length > idx;
                       return (
                         <motion.div
@@ -2041,7 +2399,7 @@ export default function App() {
                       {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
                         <button key={num} type="button"
                           onClick={() => {
-                            if (unlockInput.length < (settings.pinLength || 4)) {
+                            if (unlockInput.length < 8) {
                               setUnlockInput(prev => prev + num);
                             }
                           }}
@@ -2056,7 +2414,7 @@ export default function App() {
                       </button>
                       <button type="button"
                         onClick={() => {
-                          if (unlockInput.length < (settings.pinLength || 4)) {
+                          if (unlockInput.length < 8) {
                             setUnlockInput(prev => prev + '0');
                           }
                         }}
@@ -2080,7 +2438,7 @@ export default function App() {
                     autoFocus
                     autoComplete="current-password"
                     placeholder="Enter your passphrase / master key"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#00dce5]/50 focus:ring-2 focus:ring-[#00dce5]/25 focus:bg-white/[0.07] transition-all duration-200 pr-10"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[var(--color-accent)]/50 focus:ring-2 focus:ring-[var(--color-accent)]/25 focus:bg-white/[0.07] transition-all duration-200 pr-10"
                   />
                   <button type="button" onClick={() => setShowUnlockInput(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8e90a2] hover:text-white transition-colors">
                     {showUnlockInput ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -2095,14 +2453,18 @@ export default function App() {
                 </motion.div>
               )}
               
-              <button type="submit" className="w-full py-3 rounded-xl bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white font-semibold text-sm hover:opacity-90 hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-200">
+              <button type="submit" disabled={unlockMethod === 'pin' && unlockInput.length < 4} className={`w-full py-3 rounded-xl font-semibold text-sm transition-all duration-200 ${
+                unlockMethod === 'pin' && unlockInput.length < 4
+                  ? 'bg-white/5 text-white/40 border border-white/5 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white hover:opacity-90 hover:-translate-y-0.5 active:scale-[0.98]'
+              }`}>
                 Unlock →
               </button>
             </form>
           )}
 
           {unlockError && unlockMethod !== 'passphrase' && (
-            <button onClick={() => { setUnlockMethod('passphrase'); setUnlockError(''); }} className="text-xs text-[#00dce5] hover:underline">
+            <button onClick={() => { setUnlockMethod('passphrase'); setUnlockError(''); }} className="text-xs text-[var(--color-accent)] hover:underline">
               Use passphrase instead
             </button>
           )}
@@ -2142,8 +2504,8 @@ export default function App() {
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-[9999] bg-black/85 backdrop-blur-[24px] flex flex-col items-center justify-center gap-4 text-center select-none cursor-default"
           >
-            <div className="w-16 h-16 rounded-2xl bg-[#00dce5]/10 border border-[#00dce5]/20 flex items-center justify-center animate-pulse">
-              <Shield className="w-8 h-8 text-[#00dce5]" />
+            <div className="w-16 h-16 rounded-2xl bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/20 flex items-center justify-center animate-pulse">
+              <Shield className="w-8 h-8 text-[var(--color-accent)]" />
             </div>
             <div className="space-y-1">
               <h2 className="text-lg font-semibold text-white">Vault Security Shield</h2>
@@ -2171,14 +2533,14 @@ export default function App() {
         <div className="h-16 px-4 flex items-center justify-between shrink-0 border-b border-white/5">
           {!sidebarCollapsed && (
             <div className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded-lg bg-[#00dce5]/20 flex items-center justify-center">
-                <Shield className="w-4 h-4 text-[#00dce5]" />
+              <div className="w-7 h-7 rounded-lg bg-[var(--color-accent)]/20 flex items-center justify-center">
+                <Shield className="w-4 h-4 text-[var(--color-accent)]" />
               </div>
               <span className="font-display font-semibold text-base text-white tracking-tight">Only Auth</span>
             </div>
           )}
           <button onClick={() => setSidebarCollapsed(v => !v)}
-            className={`w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-[#c4c5d9] hover:text-white transition-colors ${sidebarCollapsed ? 'mx-auto' : ''}`}>
+            className={`hidden md:flex w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-[#c4c5d9] hover:text-white transition-colors ${sidebarCollapsed ? 'mx-auto' : ''}`}>
             <ChevronRight className={`w-4 h-4 transition-transform ${sidebarCollapsed ? '' : 'rotate-180'}`} />
           </button>
         </div>
@@ -2199,14 +2561,14 @@ export default function App() {
               return (
                 <button key={tag} onClick={() => safeTransition(() => { setActiveTag(tag); setMobileDrawerOpen(false); })}
                   className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all duration-150 ease-out border-l-[3px] ${
-                    isActive ? `bg-white/5 text-white ${isHiddenVaultActive ? 'border-amber-500 text-amber-400 font-semibold' : 'border-[#00dce5] text-white font-semibold'}` : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
+                    isActive ? `bg-white/5 text-white ${isHiddenVaultActive ? 'border-amber-500 text-amber-400 font-semibold' : 'border-[var(--color-accent)] text-white font-semibold'}` : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
                   } ${sidebarCollapsed ? 'justify-center px-0 border-l-0 rounded-full w-10 h-10 mx-auto' : ''}`}>
                   <Icon className="w-4 h-4 shrink-0" />
                   {!sidebarCollapsed && (
                     <>
                       <span className="capitalize flex-1 text-left truncate">{tag === 'all' ? 'All' : tag}</span>
                       {count > 0 && (
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-mono ${isActive ? `${isHiddenVaultActive ? 'bg-amber-500 text-black font-bold' : 'bg-[#00dce5] text-black font-bold'}` : 'bg-white/10 text-[#8e90a2]'}`}>
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-mono ${isActive ? `${isHiddenVaultActive ? 'bg-amber-500 text-black font-bold' : 'bg-[var(--color-accent)] text-black font-bold'}` : 'bg-white/10 text-[#8e90a2]'}`}>
                           {count}
                         </span>
                       )}
@@ -2240,7 +2602,7 @@ export default function App() {
               return (
                 <button onClick={() => safeTransition(() => { setActiveTag(tab.value); setMobileDrawerOpen(false); })}
                   className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all duration-150 ease-out border-l-[3px] ${
-                    isActive ? 'bg-white/5 text-white border-[#00dce5] font-semibold' : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
+                    isActive ? 'bg-white/5 text-white border-[var(--color-accent)] font-semibold' : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
                   } ${sidebarCollapsed ? 'justify-center px-0 border-l-0 rounded-full w-10 h-10 mx-auto' : ''}`}>
                   <Icon className="w-4 h-4 shrink-0" />
                   {!sidebarCollapsed && <span>{tab.label}</span>}
@@ -2251,7 +2613,7 @@ export default function App() {
             {/* Import - Top-level sibling button */}
             <button onClick={() => safeTransition(() => { setActiveTag('settings'); setSettingsSubTab('import-export'); setMobileDrawerOpen(false); })}
               className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all duration-150 ease-out border-l-[3px] ${
-                activeTag === 'settings' && settingsSubTab === 'import-export' ? 'bg-white/5 text-white border-[#00dce5] font-semibold' : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
+                activeTag === 'settings' && settingsSubTab === 'import-export' ? 'bg-white/5 text-white border-[var(--color-accent)] font-semibold' : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
               } ${sidebarCollapsed ? 'justify-center px-0 border-l-0 rounded-full w-10 h-10 mx-auto' : ''}`}
               title={sidebarCollapsed ? "Import" : undefined}>
               <Upload className="w-4 h-4 shrink-0" />
@@ -2261,7 +2623,7 @@ export default function App() {
             {/* Export - Top-level sibling button */}
             <button onClick={() => safeTransition(() => { setActiveTag('settings'); setSettingsSubTab('import-export'); setMobileDrawerOpen(false); })}
               className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all duration-150 ease-out border-l-[3px] ${
-                activeTag === 'settings' && settingsSubTab === 'import-export' ? 'bg-white/5 text-white border-[#00dce5] font-semibold' : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
+                activeTag === 'settings' && settingsSubTab === 'import-export' ? 'bg-white/5 text-white border-[var(--color-accent)] font-semibold' : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
               } ${sidebarCollapsed ? 'justify-center px-0 border-l-0 rounded-full w-10 h-10 mx-auto' : ''}`}
               title={sidebarCollapsed ? "Export" : undefined}>
               <Download className="w-4 h-4 shrink-0" />
@@ -2275,7 +2637,7 @@ export default function App() {
               return (
                 <button key={tab.value} onClick={tab.value === 'settings' ? handleSettingsClick : () => safeTransition(() => { setActiveTag(tab.value); setMobileDrawerOpen(false); })}
                   className={`flex items-center gap-3 rounded-r-full px-3 py-2.5 text-xs transition-all duration-150 ease-out border-l-[3px] ${
-                    isActive ? 'bg-white/5 text-white border-[#00dce5] font-semibold' : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
+                    isActive ? 'bg-white/5 text-white border-[var(--color-accent)] font-semibold' : 'border-transparent text-[#c4c5d9] hover:bg-white/5 hover:text-white'
                   } ${sidebarCollapsed ? 'justify-center px-0 border-l-0 rounded-full w-10 h-10 mx-auto' : ''}`}>
                   <Icon className="w-4 h-4 shrink-0" />
                   {!sidebarCollapsed && <span>{tab.label}</span>}
@@ -2295,7 +2657,7 @@ export default function App() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <h4 className="text-white text-xs font-semibold truncate">{settings.devAccountName || 'Dev Account'}</h4>
-                  <p className="text-[9px] text-[#00dce5] uppercase tracking-wider font-semibold truncate h-[13px] flex items-center">
+                  <p className="text-[9px] text-[var(--color-accent)] uppercase tracking-wider font-semibold truncate h-[13px] flex items-center">
                     <span className="transition-all duration-300">
                       {isThanksActive ? 'Thanks for contri..' : (settings.devAccountTag || 'Premium')}
                     </span>
@@ -2315,7 +2677,7 @@ export default function App() {
         {!sidebarCollapsed && (
           <div
             onMouseDown={() => setIsResizing(true)}
-            className="absolute top-0 right-0 w-[4px] h-full cursor-col-resize hover:bg-[#00dce5]/50 active:bg-[#00dce5] transition-colors z-50"
+            className="absolute top-0 right-0 w-[4px] h-full cursor-col-resize hover:bg-[var(--color-accent)]/50 active:bg-[var(--color-accent)] transition-colors z-50"
           />
         )}
       </aside>
@@ -2340,7 +2702,7 @@ export default function App() {
                   onChange={e => setSearchQuery(e.target.value)}
                   placeholder="Search accounts..."
                   autoFocus
-                  className="w-full bg-white/5 border border-white/10 rounded-full py-2 pl-9 pr-4 text-xs text-white focus:outline-none focus:border-[#00dce5]/50 focus:ring-2 focus:ring-[#00dce5]/20 focus:bg-white/[0.07] transition-all duration-200 placeholder-white/30"
+                  className="w-full bg-white/5 border border-white/10 rounded-full py-2 pl-9 pr-4 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/50 focus:ring-2 focus:ring-[var(--color-accent)]/20 focus:bg-white/[0.07] transition-all duration-200 placeholder-white/30"
                 />
               </div>
             </div>
@@ -2362,7 +2724,7 @@ export default function App() {
                   <div className="relative hidden sm:block">
                     <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8e90a2]" />
                     <input ref={searchInputRef} type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search accounts..."
-                      className="w-48 md:w-60 bg-white/5 border border-white/10 rounded-full py-2 pl-9 pr-4 text-xs text-white focus:outline-none focus:border-[#00dce5]/50 focus:ring-2 focus:ring-[#00dce5]/20 focus:w-56 md:focus:w-72 focus:bg-white/[0.07] transition-all duration-200 placeholder-white/30" />
+                      className="w-48 md:w-60 bg-white/5 border border-white/10 rounded-full py-2 pl-9 pr-4 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/50 focus:ring-2 focus:ring-[var(--color-accent)]/20 focus:w-56 md:focus:w-72 focus:bg-white/[0.07] transition-all duration-200 placeholder-white/30" />
                   </div>
                 )}
 
@@ -2384,7 +2746,7 @@ export default function App() {
                 {/* Add account button — desktop only */}
                 {isVaultTab && (
                   <button onClick={openAddModal}
-                    className="hidden sm:flex w-9 h-9 rounded-full bg-[#00dce5] text-black items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all duration-150 ease-out cursor-pointer">
+                    className="hidden sm:flex w-9 h-9 rounded-full bg-[var(--color-accent)] text-black items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all duration-150 ease-out cursor-pointer">
                     <Plus className="w-5 h-5 stroke-[3px]" />
                   </button>
                 )}
@@ -2430,9 +2792,9 @@ export default function App() {
                   )}
 
                   {focusedAccount ? (
-                    <div className={`glass-panel-accent rounded-3xl relative overflow-hidden focus-card-transition group border-l-4 ${isHiddenVaultActive ? 'border-l-amber-500 shadow-[4px_0_20px_-6px_rgba(251,191,36,0.25)]' : 'border-l-[#00dce5] shadow-[4px_0_20px_-6px_rgba(0,220,229,0.25)]'}`}
+                    <div className={`glass-panel-accent rounded-3xl relative overflow-hidden focus-card-transition group border-l-4 ${isHiddenVaultActive ? 'border-l-amber-500 shadow-[4px_0_20px_-6px_rgba(251,191,36,0.25)]' : 'border-l-[var(--color-accent)] shadow-[4px_0_20px_-6px_rgba(var(--color-accent-rgb),0.25)]'}`}
                       style={{ padding: c ? '1.25rem' : '2rem' }}>
-                      <div className={`card-bg-blur ${isHiddenVaultActive ? 'bg-amber-500/10' : 'bg-[#00dce5]/10'}`} />
+                      <div className={`card-bg-blur ${isHiddenVaultActive ? 'bg-amber-500/10' : 'bg-[var(--color-accent)]/10'}`} />
 
                       <div className="flex justify-between items-start relative z-10">
                         <div className="flex items-center gap-3 min-w-0">
@@ -2459,7 +2821,7 @@ export default function App() {
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0">
                           <button onClick={e => handleTogglePin(focusedAccount.id, e)}
-                            className={`w-8 h-8 rounded-lg flex items-center justify-center border transition-all ${focusedAccount.isPinned ? 'bg-[#00dce5]/10 border-[#00dce5]/40 text-[#00dce5]' : 'bg-white/5 border-white/10 text-[#c4c5d9] hover:text-white'}`}>
+                            className={`w-8 h-8 rounded-lg flex items-center justify-center border transition-all ${focusedAccount.isPinned ? 'bg-[var(--color-accent)]/10 border-[var(--color-accent)]/40 text-[var(--color-accent)]' : 'bg-white/5 border-white/10 text-[#c4c5d9] hover:text-white'}`}>
                             <Pin className="w-3.5 h-3.5" />
                           </button>
                           <button onClick={() => openEditModal(focusedAccount)}
@@ -2479,7 +2841,7 @@ export default function App() {
                           <>
                             <motion.div key={focusedCode} initial={{ opacity: 0.7, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }}
                               onClick={() => handleCopyCode(focusedAccount.id, focusedCode)}
-                              className={`font-mono font-bold text-white flex items-center gap-4 cursor-pointer hover:text-[#00dce5] transition-colors select-none tabular-nums ${c ? 'text-4xl md:text-5xl' : 'text-5xl md:text-6xl'}`}
+                              className={`font-mono font-bold text-white flex items-center gap-4 cursor-pointer hover:text-[var(--color-accent)] transition-colors select-none tabular-nums ${c ? 'text-4xl md:text-5xl' : 'text-5xl md:text-6xl'}`}
                               style={{ letterSpacing: '0.15em', textShadow: totpCodes[focusedAccount?.id ?? ''] ? '0 0 20px oklch(0.82 0.12 196 / 0.4)' : 'none' }}
                               title="Click to copy">
                               <span className={totpCodes[focusedAccount?.id ?? ''] ? '' : 'animate-pulse opacity-50'}>{focusedCodeFormatted.first}</span>
@@ -2489,7 +2851,7 @@ export default function App() {
 
                             {copyFeedbackMap[focusedAccount.id] && (
                               <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-                                className="mt-3 text-xs font-semibold text-[#00dce5] flex items-center gap-1.5 bg-[#00dce5]/10 px-3 py-1 rounded-full border border-[#00dce5]/20">
+                                className="mt-3 text-xs font-semibold text-[var(--color-accent)] flex items-center gap-1.5 bg-[var(--color-accent)]/10 px-3 py-1 rounded-full border border-[var(--color-accent)]/20">
                                 <Check className="w-3.5 h-3.5" /> Copied!
                               </motion.div>
                             )}
@@ -2515,13 +2877,13 @@ export default function App() {
                               <span className="text-[#8e90a2]">Refreshes in <span className="font-mono text-white font-semibold">{accountSecondsRemaining}s</span></span>
                               {focusedAccount.secret && focusedAccount.secret.trim() !== "" && (
                                 <button onClick={() => handleCopyCode(focusedAccount.id, focusedCode)}
-                                  className="flex items-center gap-1 text-[#00dce5] hover:text-white transition-colors">
+                                  className="flex items-center gap-1 text-[var(--color-accent)] hover:text-white transition-colors">
                                   <Copy className="w-3.5 h-3.5" /> <span>Copy Code</span>
                                 </button>
                               )}
                             </div>
                             <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
-                              <div className="h-full progress-bar-inner bg-[#00dce5]" style={{ width: `${(accountSecondsRemaining / accountPeriod) * 100}%` }} />
+                              <div className="h-full progress-bar-inner bg-[var(--color-accent)]" style={{ width: `${(accountSecondsRemaining / accountPeriod) * 100}%` }} />
                             </div>
                           </div>
                         );
@@ -2531,7 +2893,7 @@ export default function App() {
                     <div className="glass-panel rounded-3xl p-10 text-center flex flex-col items-center gap-4 text-[#8e90a2]">
                       <Lock className="w-10 h-10 text-white/10" />
                       <p className="text-sm">No accounts in "{activeTag === 'all' ? 'All' : activeTag}" yet.</p>
-                      <button onClick={openAddModal} className="text-[#00dce5] text-xs font-semibold hover:underline">Add Account</button>
+                      <button onClick={openAddModal} className="text-[var(--color-accent)] text-xs font-semibold hover:underline">Add Account</button>
                     </div>
                   )}
 
@@ -2564,8 +2926,8 @@ export default function App() {
                                   <>
                                     <span className={`font-mono font-semibold tabular-nums tracking-widest text-white ${c ? 'text-base' : 'text-xl'} ${totpCodes[acc.id] ? '' : 'animate-pulse opacity-50'}`} style={{ letterSpacing: '0.15em' }}>{formatCode(pCode)}</span>
                                     <button onClick={e => { e.stopPropagation(); handleCopyCode(acc.id, pCode); }}
-                                      className="w-7 h-7 rounded-lg bg-white/5 flex items-center justify-center text-[#c4c5d9] hover:text-[#00dce5]">
-                                      {copyFeedbackMap[acc.id] ? <Check className="w-3.5 h-3.5 text-[#00dce5]" /> : <Copy className="w-3 h-3" />}
+                                      className="w-7 h-7 rounded-lg bg-white/5 flex items-center justify-center text-[#c4c5d9] hover:text-[var(--color-accent)]">
+                                      {copyFeedbackMap[acc.id] ? <Check className="w-3.5 h-3.5 text-[var(--color-accent)]" /> : <Copy className="w-3 h-3" />}
                                     </button>
                                   </>
                                 ) : (
@@ -2613,7 +2975,7 @@ export default function App() {
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-1 flex-wrap">
                                 <h4 className={`font-semibold text-white truncate ${c ? 'text-[10px]' : 'text-xs'}`}>{acc.name}</h4>
-                                {acc.isPinned && <Pin className="w-2.5 h-2.5 text-[#00dce5]/60 shrink-0 fill-current" />}
+                                {acc.isPinned && <Pin className="w-2.5 h-2.5 text-[var(--color-accent)]/60 shrink-0 fill-current" />}
                                 {acc.nextRotationDate && isRotationDue(acc.nextRotationDate) && (
                                   <span className="flex items-center gap-0.5 bg-amber-500/10 text-amber-500 border border-amber-500/20 text-[8px] font-bold px-1.5 py-0.5 rounded-full shrink-0 tracking-wider">
                                     ROTATE
@@ -2625,8 +2987,8 @@ export default function App() {
                           </div>
                           {acc.secret && acc.secret.trim() !== "" ? (
                             <div className="code-hover-target ml-3 shrink-0" onClick={e => { e.stopPropagation(); handleCopyCode(acc.id, aCode); }}>
-                              <span className={`original-code font-mono font-semibold tabular-nums tracking-widest text-white group-hover:text-[#00dce5] transition-colors ${c ? 'text-xs' : 'text-sm'} ${totpCodes[acc.id] ? '' : 'animate-pulse opacity-50'}`} style={{ letterSpacing: '0.12em' }}>{formatCode(aCode)}</span>
-                              <span className="hover-text text-[9px] text-[#00dce5] font-bold font-sans uppercase">
+                              <span className={`original-code font-mono font-semibold tabular-nums tracking-widest text-white group-hover:text-[var(--color-accent)] transition-colors ${c ? 'text-xs' : 'text-sm'} ${totpCodes[acc.id] ? '' : 'animate-pulse opacity-50'}`} style={{ letterSpacing: '0.12em' }}>{formatCode(aCode)}</span>
+                              <span className="hover-text text-[9px] text-[var(--color-accent)] font-bold font-sans uppercase">
                                 {copyFeedbackMap[acc.id] ? '✓' : 'COPY'}
                               </span>
                             </div>
@@ -2759,21 +3121,21 @@ export default function App() {
                     <p className="text-xs text-[#c4c5d9] leading-relaxed">Analysis of your vault's passphrase strength, backup status, and active hardware keys.</p>
                   </div>
                   <div className="w-28 h-28 rounded-full border-4 border-[#434656] relative flex flex-col items-center justify-center shrink-0">
-                    <div className="absolute inset-0 rounded-full border-4 border-dashed border-[#00dce5]/30" />
-                    <span className="text-3xl font-mono font-bold text-[#00dce5]">92%</span>
+                    <div className="absolute inset-0 rounded-full border-4 border-dashed border-[var(--color-accent)]/30" />
+                    <span className="text-3xl font-mono font-bold text-[var(--color-accent)]">92%</span>
                     <span className="text-[9px] uppercase font-bold text-[#8e90a2] tracking-wider mt-0.5">Strong</span>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {[
-                    { icon: Download, label: 'Backup', status: 'Stable', statusColor: 'text-green-400', desc: 'Offline backup keeps your seeds safe without cloud sync.', info: `Last: ${new Date(settings.lastBackupDate).toLocaleDateString()}`, infoColor: 'text-[#00dce5]' },
+                    { icon: Download, label: 'Backup', status: 'Stable', statusColor: 'text-green-400', desc: 'Offline backup keeps your seeds safe without cloud sync.', info: `Last: ${new Date(settings.lastBackupDate).toLocaleDateString()}`, infoColor: 'text-[var(--color-accent)]' },
                     { icon: Key, label: 'Passphrase Strength', status: passkeyStrength.label, statusColor: passkeyStrength.color, desc: 'Entropy calculated from your passphrase complexity.', info: `Score: ${passkeyStrength.score}/100`, infoColor: 'text-white' },
                     { icon: Fingerprint, label: 'Locking', status: 'Active', statusColor: 'text-green-400', desc: 'Vault locks instantly and requires passphrase, PIN, or biometrics.', info: settings.appLockEnabled ? 'App Lock Enabled' : 'App Lock Disabled', infoColor: settings.appLockEnabled ? 'text-green-400' : 'text-amber-400' },
                   ].map((card, i) => (
                     <div key={i} className="glass-panel p-5 rounded-2xl border border-white/8">
                       <div className="flex justify-between items-start mb-3">
-                        <div className="w-9 h-9 rounded-lg bg-[#00dce5]/5 border border-[#00dce5]/20 flex items-center justify-center text-[#00dce5]">
+                        <div className="w-9 h-9 rounded-lg bg-[var(--color-accent)]/5 border border-[var(--color-accent)]/20 flex items-center justify-center text-[var(--color-accent)]">
                           <card.icon className="w-4 h-4" />
                         </div>
                         <span className={`text-[9px] uppercase font-semibold ${card.statusColor}`}>{card.status}</span>
@@ -2793,15 +3155,15 @@ export default function App() {
                       <p className="text-xs text-[#8e90a2] mt-0.5">Register physical security tokens for two-factor access.</p>
                     </div>
                     <button onClick={() => setIsAddingHardwareKey(v => !v)}
-                      className="text-xs bg-[#00dce5]/10 text-[#00dce5] hover:bg-[#00dce5]/20 px-3 py-1.5 rounded-lg border border-[#00dce5]/20 font-semibold transition-all">
+                      className="text-xs bg-[var(--color-accent)]/10 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/20 px-3 py-1.5 rounded-lg border border-[var(--color-accent)]/20 font-semibold transition-all">
                       Register Key
                     </button>
                   </div>
                   {isAddingHardwareKey && (
-                    <form onSubmit={registerSecurityKey} className="flex gap-3 mb-4 p-3 rounded-xl bg-white/[0.02] border border-[#00dce5]/20 animate-fade-in">
+                    <form onSubmit={registerSecurityKey} className="flex gap-3 mb-4 p-3 rounded-xl bg-white/[0.02] border border-[var(--color-accent)]/20 animate-fade-in">
                       <input type="text" required value={newKeyName} onChange={e => setNewKeyName(e.target.value)} placeholder="e.g. YubiKey 5C"
-                        className="flex-1 bg-[#1c1b1b] border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#00dce5]/50" />
-                      <button type="submit" className="text-xs bg-[#00dce5] text-black px-4 py-2 rounded-lg font-semibold">Add</button>
+                        className="flex-1 bg-[#1c1b1b] border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/50" />
+                      <button type="submit" className="text-xs bg-[var(--color-accent)] text-black px-4 py-2 rounded-lg font-semibold">Add</button>
                       <button type="button" onClick={() => setIsAddingHardwareKey(false)} className="text-xs text-[#8e90a2] hover:text-white px-3 py-2">Cancel</button>
                     </form>
                   )}
@@ -2809,7 +3171,7 @@ export default function App() {
                     {settings.securityKeys.length > 0 ? settings.securityKeys.map(key => (
                       <div key={key.id} className="flex items-center justify-between p-3 bg-white/[0.02] border border-white/8 rounded-xl hover:border-white/12 transition-colors">
                         <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-lg bg-[#00dce5]/5 border border-[#00dce5]/15 flex items-center justify-center text-[#00dce5]">
+                          <div className="w-8 h-8 rounded-lg bg-[var(--color-accent)]/5 border border-[var(--color-accent)]/15 flex items-center justify-center text-[var(--color-accent)]">
                             <Key className="w-4 h-4" />
                           </div>
                           <div>
@@ -2843,7 +3205,7 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => setSettings(prev => ({ ...prev, duressAction: 'fake' }))}
-                          className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold border transition-all ${settings.duressAction === 'fake' ? 'bg-[#00dce5]/10 border-[#00dce5] text-white' : 'bg-transparent border-white/10 text-[#8e90a2] hover:border-white/20'}`}
+                          className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold border transition-all ${settings.duressAction === 'fake' ? 'bg-[var(--color-accent)]/10 border-[var(--color-accent)] text-white' : 'bg-transparent border-white/10 text-[#8e90a2] hover:border-white/20'}`}
                         >
                           Show Fake Vault
                         </button>
@@ -2866,12 +3228,12 @@ export default function App() {
                     <div className="bg-white/5 p-4 rounded-xl border border-white/8 space-y-2 flex flex-col justify-between">
                       <div className="flex justify-between items-center">
                         <label className="text-[10px] uppercase font-bold text-[#8e90a2] tracking-wider">Duress PIN Setup</label>
-                        <span className="text-[10px] font-mono text-[#00dce5]">{settings.duressPinHash ? 'PIN Fortified' : 'Not Configured'}</span>
+                        <span className="text-[10px] font-mono text-[var(--color-accent)]">{settings.duressPinHash ? 'PIN Fortified' : 'Not Configured'}</span>
                       </div>
                       <button
                         type="button"
                         onClick={() => setShowDuressSetup(true)}
-                        className="w-full py-2 px-4 rounded-lg bg-[#00dce5]/10 text-[#00dce5] hover:bg-[#00dce5]/20 border border-[#00dce5]/20 font-semibold text-xs transition-all"
+                        className="w-full py-2 px-4 rounded-lg bg-[var(--color-accent)]/10 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/20 font-semibold text-xs transition-all"
                       >
                         {settings.duressPinHash ? 'Change Duress PIN' : 'Configure Duress PIN'}
                       </button>
@@ -2917,7 +3279,7 @@ export default function App() {
                           showToast('Failed to decrypt audit logs.', 'error');
                         }
                       }}
-                      className="text-xs bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 px-3 py-1.5 rounded-lg text-[#00dce5] font-semibold transition-all flex items-center gap-1.5"
+                      className="text-xs bg-white/5 border border-white/8 hover:bg-white/10 hover:border-white/20 px-3 py-1.5 rounded-lg text-[var(--color-accent)] font-semibold transition-all flex items-center gap-1.5"
                     >
                       <RefreshCw className="w-3 h-3" /> Fetch Logs
                     </button>
@@ -2976,7 +3338,7 @@ export default function App() {
                         <p className="text-xs text-[#8e90a2] mt-0.5">Smaller rows — fit more accounts on screen</p>
                       </div>
                       <button onClick={() => setSettings(prev => ({ ...prev, compactMode: !prev.compactMode }))}
-                        className={`relative w-10 h-6 rounded-full transition-colors ${settings.compactMode ? 'bg-[#00dce5]' : 'bg-white/10'}`}>
+                        className={`relative w-10 h-6 rounded-full transition-colors ${settings.compactMode ? 'bg-[var(--color-accent)]' : 'bg-white/10'}`}>
                         <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${settings.compactMode ? 'left-5' : 'left-1'}`} />
                       </button>
                     </div>
@@ -2994,7 +3356,7 @@ export default function App() {
                           max="300"
                           value={settings.timeOffsetSeconds || 0}
                           onChange={e => setSettings(prev => ({ ...prev, timeOffsetSeconds: parseInt(e.target.value) }))}
-                          className="flex-1 accent-[#00dce5] h-1 bg-white/10 rounded-lg appearance-none cursor-pointer"
+                          className="flex-1 accent-[var(--color-accent)] h-1 bg-white/10 rounded-lg appearance-none cursor-pointer"
                         />
                         <span className="text-xs font-mono text-white min-w-[50px] text-right">
                           {(settings.timeOffsetSeconds || 0) > 0 ? `+${settings.timeOffsetSeconds}` : settings.timeOffsetSeconds}s
@@ -3007,7 +3369,7 @@ export default function App() {
                             onClick={() => setSettings(prev => ({ ...prev, timeOffsetSeconds: val }))}
                             className={`px-3 py-1 rounded-lg text-[10px] font-mono border transition-all ${
                               settings.timeOffsetSeconds === val
-                                ? 'bg-[#00dce5]/10 border-[#00dce5] text-[#00dce5]'
+                                ? 'bg-[var(--color-accent)]/10 border-[var(--color-accent)] text-[var(--color-accent)]'
                                 : 'bg-white/5 border-white/10 text-[#8e90a2] hover:text-white'
                             }`}
                           >
@@ -3029,7 +3391,7 @@ export default function App() {
                               showToast('Failed to sync time online. Using manual calibration.', 'error');
                             }
                           }}
-                          className="px-3 py-1 ml-auto bg-[#00dce5] text-black font-semibold rounded-lg text-[10px] hover:opacity-90 transition-all"
+                          className="px-3 py-1 ml-auto bg-[var(--color-accent)] text-black font-semibold rounded-lg text-[10px] hover:opacity-90 transition-all"
                         >
                           Auto Sync
                         </button>
@@ -3043,7 +3405,7 @@ export default function App() {
                         <p className="text-xs text-[#8e90a2] mt-0.5">Automatically focus search bar on startup or vault unlock</p>
                       </div>
                       <button onClick={() => setSettings(prev => ({ ...prev, forceSearchOnStartup: !prev.forceSearchOnStartup }))}
-                        className={`relative w-10 h-6 rounded-full transition-colors ${settings.forceSearchOnStartup ? 'bg-[#00dce5]' : 'bg-white/10'}`}>
+                        className={`relative w-10 h-6 rounded-full transition-colors ${settings.forceSearchOnStartup ? 'bg-[var(--color-accent)]' : 'bg-white/10'}`}>
                         <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${settings.forceSearchOnStartup ? 'left-5' : 'left-1'}`} />
                       </button>
                     </div>
@@ -3067,7 +3429,7 @@ export default function App() {
                       <label className="text-[10px] uppercase tracking-wider font-semibold text-[#8e90a2]">App Theme Accent</label>
                       <div className="grid grid-cols-5 gap-2">
                         {([
-                          { id: 'cyan', label: 'Cyan', bg: 'bg-[#00dce5]' },
+                          { id: 'cyan', label: 'Cyan', bg: 'bg-[var(--color-accent)]' },
                           { id: 'amber', label: 'Amber', bg: 'bg-amber-500' },
                           { id: 'emerald', label: 'Emerald', bg: 'bg-emerald-500' },
                           { id: 'purple', label: 'Purple', bg: 'bg-purple-500' },
@@ -3121,7 +3483,7 @@ export default function App() {
                           type="text"
                           value={settings.devAccountName}
                           onChange={e => setSettings(prev => ({ ...prev, devAccountName: e.target.value }))}
-                          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/50 focus:ring-1 focus:ring-[#00dce5]/20 transition-all"
+                          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/50 focus:ring-1 focus:ring-[var(--color-accent)]/20 transition-all"
                           placeholder="Dev Account"
                         />
                       </div>
@@ -3136,7 +3498,7 @@ export default function App() {
                           onChange={e => setSettings(prev => ({ ...prev, devAccountTag: e.target.value }))}
                           className={`w-full bg-white/5 border rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:ring-1 transition-all ${
                             settings.githubContributor 
-                              ? 'border-white/10 focus:border-[#00dce5]/50 focus:ring-[#00dce5]/20' 
+                              ? 'border-white/10 focus:border-[var(--color-accent)]/50 focus:ring-[var(--color-accent)]/20' 
                               : 'border-white/5 text-neutral-500 cursor-not-allowed opacity-50'
                           }`}
                           placeholder={settings.githubContributor ? "Premium" : "Star repo to unlock custom tags!"}
@@ -3150,7 +3512,7 @@ export default function App() {
                       <div className="space-y-2 pt-2 border-t border-white/5">
                         <div className="flex justify-between items-center">
                           <label className="text-[10px] uppercase tracking-wider font-semibold text-[#8e90a2]">Sidebar Panel Width</label>
-                          <span className="text-[10px] font-mono text-[#00dce5]">{sidebarWidth}px</span>
+                          <span className="text-[10px] font-mono text-[var(--color-accent)]">{sidebarWidth}px</span>
                         </div>
                         <input
                           type="range"
@@ -3158,7 +3520,7 @@ export default function App() {
                           max="450"
                           value={sidebarWidth}
                           onChange={e => setSidebarWidth(parseInt(e.target.value, 10))}
-                          className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#00dce5]"
+                          className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[var(--color-accent)]"
                         />
                       </div>
                     </div>
@@ -3166,9 +3528,9 @@ export default function App() {
                     {/* GitHub Contributor Loop (Emotional Message) */}
                     <div className="pt-4 border-t border-white/5 space-y-4">
                       <div className="p-4 bg-gradient-to-br from-neutral-900 to-black rounded-2xl border border-white/5 relative overflow-hidden flex flex-col gap-3">
-                        <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-[#00dce5]/40 to-transparent" />
+                        <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-[var(--color-accent)]/40 to-transparent" />
                         <h4 className="text-xs font-semibold text-white flex items-center gap-1.5">
-                          <svg className="w-4 h-4 text-[#00dce5]" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                          <svg className="w-4 h-4 text-[var(--color-accent)]" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
                           Support Privacy & Security
                         </h4>
                         
@@ -3188,7 +3550,7 @@ export default function App() {
                             className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
                               settings.githubContributor 
                                 ? 'bg-green-500/10 border border-green-500/30 text-green-400 cursor-default' 
-                                : 'bg-[#00dce5] hover:opacity-95 text-black hover:scale-[1.02]'
+                                : 'bg-[var(--color-accent)] hover:opacity-95 text-black hover:scale-[1.02]'
                             }`}
                           >
                             {settings.githubContributor ? '✓ Unlocked Premium!' : 'Yes, I have starred / donated!'}
@@ -3246,12 +3608,12 @@ export default function App() {
                       <p className="text-xs text-[#8e90a2]">Regenerate your 256-bit cryptographic master key.</p>
                       {newMasterKeyField ? (
                         <div className="space-y-3">
-                          <div className="bg-[#0e0e0e] border border-white/10 rounded-xl p-3 font-mono text-xs text-[#00dce5] break-all select-all">
+                          <div className="bg-[#0e0e0e] border border-white/10 rounded-xl p-3 font-mono text-xs text-[var(--color-accent)] break-all select-all">
                             {newMasterKeyField}
                           </div>
                           <div className="flex gap-2">
                             <button type="button" onClick={handleSaveNewMasterKeySubmit}
-                              className="px-4 py-2.5 text-xs bg-[#00dce5] text-black font-semibold rounded-xl hover:opacity-90 transition-opacity">
+                              className="px-4 py-2.5 text-xs bg-[var(--color-accent)] text-black font-semibold rounded-xl hover:opacity-90 transition-opacity">
                               Authorize & Save Master Key
                             </button>
                             <button type="button" onClick={() => setNewMasterKeyField("")} className="px-4 py-2.5 text-xs border border-white/10 text-white rounded-xl">
@@ -3277,7 +3639,7 @@ export default function App() {
                             pattern="\d*"
                             inputMode="numeric"
                             maxLength={8}
-                            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#00dce5]/50 transition-all placeholder-[#8e90a2] font-mono tracking-widest" />
+                            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[var(--color-accent)]/50 transition-all placeholder-[#8e90a2] font-mono tracking-widest" />
                         </div>
                         <div className="relative flex-1 min-w-[160px]">
                           <input type="password" value={newPinConfirm} onChange={e => setNewPinConfirm(e.target.value)}
@@ -3285,9 +3647,9 @@ export default function App() {
                             pattern="\d*"
                             inputMode="numeric"
                             maxLength={8}
-                            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#00dce5]/50 transition-all placeholder-[#8e90a2] font-mono tracking-widest" />
+                            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[var(--color-accent)]/50 transition-all placeholder-[#8e90a2] font-mono tracking-widest" />
                         </div>
-                        <button type="submit" className="px-5 py-2.5 text-xs bg-[#00dce5]/10 text-[#00dce5] font-semibold rounded-xl hover:bg-[#00dce5]/20 transition-all border border-[#00dce5]/20 shrink-0">Update PIN</button>
+                        <button type="submit" className="px-5 py-2.5 text-xs bg-[var(--color-accent)]/10 text-[var(--color-accent)] font-semibold rounded-xl hover:bg-[var(--color-accent)]/20 transition-all border border-[var(--color-accent)]/20 shrink-0">Update PIN</button>
                       </form>
                     </div>
                   </div>
@@ -3302,7 +3664,7 @@ export default function App() {
                         {settings.customTags.filter(tag => tag.toLowerCase() !== 'hide' && tag.toLowerCase() !== 'hidden').map(tag => (
                           <div key={tag} className="flex items-center justify-between px-4 py-2.5 bg-white/5 border border-white/8 rounded-xl">
                             <div className="flex items-center gap-2.5">
-                              <Tag className="w-3.5 h-3.5 text-[#00dce5]" />
+                              <Tag className="w-3.5 h-3.5 text-[var(--color-accent)]" />
                               <span className="text-sm text-white capitalize">{tag}</span>
                               <span className="text-[9px] font-mono text-[#8e90a2]">{accounts.filter(a => a.category === tag).length} accounts</span>
                             </div>
@@ -3316,8 +3678,8 @@ export default function App() {
                       </div>
                       <form onSubmit={createTag} className="flex gap-2.5">
                         <input type="text" value={newTagName} onChange={e => setNewTagName(e.target.value)} placeholder="Enter new tag name..."
-                          className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#00dce5]/50 transition-all placeholder-[#8e90a2]" />
-                        <button type="submit" className="px-4 py-2.5 bg-[#00dce5] text-black text-xs font-semibold rounded-xl hover:opacity-90 transition-opacity">Add Tag</button>
+                          className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[var(--color-accent)]/50 transition-all placeholder-[#8e90a2]" />
+                        <button type="submit" className="px-4 py-2.5 bg-[var(--color-accent)] text-black text-xs font-semibold rounded-xl hover:opacity-90 transition-opacity">Add Tag</button>
                       </form>
                     </div>
                   </div>
@@ -3334,7 +3696,7 @@ export default function App() {
                       {/* Import card */}
                       <div className="glass-panel p-5 rounded-xl border border-white/8 space-y-4">
                         <h4 className="text-xs font-semibold text-white uppercase tracking-wider flex items-center gap-1.5">
-                          <Upload className="w-3.5 h-3.5 text-[#00dce5]" /> Import Accounts
+                          <Upload className="w-3.5 h-3.5 text-[var(--color-accent)]" /> Import Accounts
                         </h4>
                         <p className="text-[11px] text-[#8e90a2] leading-relaxed">
                           Import credentials from a decrypted backup file. Supports Only Auth, Ente Auth, and Bitwarden formats.
@@ -3387,7 +3749,7 @@ export default function App() {
                             value={backupPassword}
                             onChange={e => setBackupPassword(e.target.value)}
                             placeholder="Enter backup password..."
-                            className="w-full bg-[#1c1b1b]/80 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 transition-all placeholder-[#8e90a2]"
+                            className="w-full bg-[#1c1b1b]/80 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/60 transition-all placeholder-[#8e90a2]"
                           />
                           <div className="relative">
                             <input type="file" accept=".sealed,.txt,.json" onChange={async (e) => {
@@ -3414,7 +3776,7 @@ export default function App() {
                               reader.readAsText(file);
                             }} className="hidden" id="sealed-import-input" />
                             <label htmlFor="sealed-import-input"
-                              className="w-full h-10 px-4 rounded-xl border border-[#00dce5]/20 bg-[#00dce5]/5 hover:bg-[#00dce5]/10 transition-all text-xs font-semibold flex items-center justify-between text-[#00dce5] cursor-pointer">
+                              className="w-full h-10 px-4 rounded-xl border border-[var(--color-accent)]/20 bg-[var(--color-accent)]/5 hover:bg-[var(--color-accent)]/10 transition-all text-xs font-semibold flex items-center justify-between text-[var(--color-accent)] cursor-pointer">
                               <span>Select & Verify Sealed Backup</span>
                               <ShieldCheck className="w-3.5 h-3.5" />
                             </label>
@@ -3425,7 +3787,7 @@ export default function App() {
                       {/* Export card */}
                       <div className="glass-panel p-5 rounded-xl border border-white/8 space-y-4">
                         <h4 className="text-xs font-semibold text-white uppercase tracking-wider flex items-center gap-1.5">
-                          <Download className="w-3.5 h-3.5 text-[#00dce5]" /> Export & Resets
+                          <Download className="w-3.5 h-3.5 text-[var(--color-accent)]" /> Export & Resets
                         </h4>
                         <p className="text-[11px] text-[#8e90a2] leading-relaxed">
                           Export your encrypted Only Auth vault or reset your configuration. Keep your backups offline!
@@ -3433,7 +3795,7 @@ export default function App() {
 
                         <div className="space-y-2.5">
                           <button onClick={() => triggerExport('purified-json')}
-                            className="w-full h-10 px-4 rounded-xl bg-[#00dce5] text-black hover:opacity-90 transition-all text-xs font-semibold flex items-center justify-between">
+                            className="w-full h-10 px-4 rounded-xl bg-[var(--color-accent)] text-black hover:opacity-90 transition-all text-xs font-semibold flex items-center justify-between">
                             <span>Export Purified JSON (incl. settings)</span>
                             <Download className="w-3.5 h-3.5" />
                           </button>
@@ -3465,7 +3827,7 @@ export default function App() {
                             value={backupPassword}
                             onChange={e => setBackupPassword(e.target.value)}
                             placeholder="Create backup password..."
-                            className="w-full bg-[#1c1b1b]/80 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 transition-all placeholder-[#8e90a2]"
+                            className="w-full bg-[#1c1b1b]/80 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/60 transition-all placeholder-[#8e90a2]"
                           />
                           <button
                             onClick={async () => {
@@ -3536,7 +3898,7 @@ export default function App() {
                         <p className="text-xs text-[#8e90a2] mt-0.5">Use a secondary fast unlock method on startup</p>
                       </div>
                       <button onClick={() => setSettings(prev => ({ ...prev, appLockEnabled: !prev.appLockEnabled }))}
-                        className={`relative w-10 h-6 rounded-full transition-colors ${settings.appLockEnabled ? 'bg-[#00dce5]' : 'bg-white/10'}`}>
+                        className={`relative w-10 h-6 rounded-full transition-colors ${settings.appLockEnabled ? 'bg-[var(--color-accent)]' : 'bg-white/10'}`}>
                         <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${settings.appLockEnabled ? 'left-5' : 'left-1'}`} />
                       </button>
                     </div>
@@ -3561,13 +3923,13 @@ export default function App() {
                                   setSettings(prev => ({ ...prev, appLockMethod: option.id }));
                                 }}
                                 className={`w-full p-4 rounded-xl border text-left transition-all flex items-center justify-between ${
-                                  isSelected ? 'border-[#00dce5]/50 bg-[#00dce5]/5 text-white' : 'border-white/10 bg-white/5 text-[#8e90a2] hover:text-white'
+                                  isSelected ? 'border-[var(--color-accent)]/50 bg-[var(--color-accent)]/5 text-white' : 'border-white/10 bg-white/5 text-[#8e90a2] hover:text-white'
                                 }`}>
                                 <div>
                                   <div className="font-semibold text-xs">{option.label}</div>
                                   <div className="text-[10px] text-[#8e90a2] mt-0.5">{option.desc}</div>
                                 </div>
-                                {isSelected && <Check className="w-4 h-4 text-[#00dce5]" />}
+                                {isSelected && <Check className="w-4 h-4 text-[var(--color-accent)]" />}
                               </button>
                             );
                           })}
@@ -3582,7 +3944,7 @@ export default function App() {
                         <p className="text-xs text-[#8e90a2] mt-0.5">Protect vault by disabling native screenshots & video capture</p>
                       </div>
                       <button onClick={() => setSettings(prev => ({ ...prev, screenshotProtection: !prev.screenshotProtection }))}
-                        className={`relative w-10 h-6 rounded-full transition-colors ${settings.screenshotProtection !== false ? 'bg-[#00dce5]' : 'bg-white/10'}`}>
+                        className={`relative w-10 h-6 rounded-full transition-colors ${settings.screenshotProtection !== false ? 'bg-[var(--color-accent)]' : 'bg-white/10'}`}>
                         <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${settings.screenshotProtection !== false ? 'left-5' : 'left-1'}`} />
                       </button>
                     </div>
@@ -3596,7 +3958,7 @@ export default function App() {
               <motion.div key="support" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="max-w-2xl space-y-6 animate-fade-in">
                 <div className="glass-panel p-6 rounded-2xl border border-white/8 space-y-4">
                   <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-[#00dce5]/10 border border-[#00dce5]/20 flex items-center justify-center text-[#00dce5]">
+                    <div className="w-9 h-9 rounded-xl bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/20 flex items-center justify-center text-[var(--color-accent)]">
                       <Mail className="w-5 h-5" />
                     </div>
                     <h3 className="font-display text-base font-semibold text-white">Contact Support</h3>
@@ -3607,14 +3969,14 @@ export default function App() {
                       <Check className="w-7 h-7 text-green-400 mx-auto" />
                       <h4 className="font-semibold text-white text-sm">Message Sent</h4>
                       <p className="text-xs text-[#8e90a2]">Sent to {supportEmail}. We'll get back to you soon.</p>
-                      <button onClick={() => setSupportSuccess(false)} className="text-xs text-[#00dce5] underline font-semibold mt-1">Send another</button>
+                      <button onClick={() => setSupportSuccess(false)} className="text-xs text-[var(--color-accent)] underline font-semibold mt-1">Send another</button>
                     </div>
                   ) : (
                     <form onSubmit={handleSendSupport} className="space-y-3 pt-1">
                       <input type="text" required value={supportSubject} onChange={e => setSupportSubject(e.target.value)} placeholder="Subject"
-                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/50 transition-all" />
+                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/50 transition-all" />
                       <textarea required rows={4} value={supportMessage} onChange={e => setSupportMessage(e.target.value)} placeholder="Describe your issue..."
-                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs text-white focus:outline-none focus:border-[#00dce5]/50 transition-all" />
+                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/50 transition-all" />
                       <button type="submit" disabled={isSupportSending}
                         className="w-full py-3 bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white font-semibold text-xs rounded-xl hover:opacity-90 transition-opacity flex items-center justify-center gap-2 disabled:opacity-50">
                         {isSupportSending ? <><RefreshCw className="w-4 h-4 animate-spin" /> Sending...</> : <><Mail className="w-4 h-4" /> Send Message</>}
@@ -3628,7 +3990,7 @@ export default function App() {
                   <h4 className="text-xs uppercase tracking-widest text-[#8e90a2] font-semibold">Help Assistant</h4>
                   <div className="h-36 overflow-y-auto space-y-2.5 bg-black/30 p-3 rounded-xl border border-white/8 font-mono text-[11px] text-[#8e90a2]">
                     {chatMessages.map((m, i) => (
-                      <div key={i} className={m.sender === 'user' ? 'text-white text-right' : 'text-[#00dce5]'}>
+                      <div key={i} className={m.sender === 'user' ? 'text-white text-right' : 'text-[var(--color-accent)]'}>
                         <span className="text-[9px] opacity-40 mr-1">{m.time}</span>
                         <strong>{m.sender === 'user' ? 'You: ' : 'Only Auth: '}</strong>
                         <span>{m.text}</span>
@@ -3637,8 +3999,8 @@ export default function App() {
                   </div>
                   <form onSubmit={handleSendCommand} className="flex gap-2">
                     <input type="text" value={chatInput} onChange={e => setChatInput(e.target.value)} placeholder="Ask a question..."
-                      className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#00dce5]/50 transition-all" />
-                    <button type="submit" className="text-xs bg-[#00dce5] text-black px-4 py-2 rounded-xl font-semibold">Ask</button>
+                      className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/50 transition-all" />
+                    <button type="submit" className="text-xs bg-[var(--color-accent)] text-black px-4 py-2 rounded-xl font-semibold">Ask</button>
                   </form>
                 </div>
               </motion.div>
@@ -3651,7 +4013,7 @@ export default function App() {
         {isVaultTab && (
           <button
             onClick={openAddModal}
-            className="sm:hidden fixed bottom-6 right-6 w-14 h-14 rounded-full bg-[#00dce5] text-black flex items-center justify-center shadow-[0_4px_20px_rgba(0,220,229,0.3)] hover:scale-110 active:scale-95 transition-all duration-150 ease-out z-40 cursor-pointer"
+            className="sm:hidden fixed bottom-6 right-6 w-14 h-14 rounded-full bg-[var(--color-accent)] text-black flex items-center justify-center shadow-[0_4px_20px_rgba(0,220,229,0.3)] hover:scale-110 active:scale-95 transition-all duration-150 ease-out z-40 cursor-pointer"
             aria-label="Add account"
           >
             <Plus className="w-7 h-7 stroke-[3px]" />
@@ -3722,7 +4084,7 @@ export default function App() {
                               <button key={id} type="button"
                                 onClick={() => { setFormLogoType(id); setShowIconPicker(false); setIconSearchQuery(''); }}
                                 className={`flex flex-col items-center gap-1 p-1.5 rounded-xl border transition-all hover:bg-white/5 ${
-                                  formLogoType === id ? 'border-[#00dce5]/60 bg-[#00dce5]/5' : 'border-transparent'
+                                  formLogoType === id ? 'border-[var(--color-accent)]/60 bg-[var(--color-accent)]/5' : 'border-transparent'
                                 }`}>
                                 <div className="w-8 h-8 flex items-center justify-center rounded-lg">
                                   <BrandLogo name={id} logoType={id} className="w-6 h-6 text-[9px]" />
@@ -3737,7 +4099,7 @@ export default function App() {
                         <div className="py-6 text-center">
                           <p className="text-xs text-[#8e90a2]">No icons found for &ldquo;{iconSearchQuery}&rdquo;</p>
                           <button type="button" onClick={() => { setFormLogoType('custom'); setShowIconPicker(false); setIconSearchQuery(''); }}
-                            className="mt-2 text-[10px] text-[#00dce5] hover:underline">Use generic icon</button>
+                            className="mt-2 text-[10px] text-[var(--color-accent)] hover:underline">Use generic icon</button>
                         </div>
                       ) : (
                         <div className="grid grid-cols-5 gap-1.5">
@@ -3746,7 +4108,7 @@ export default function App() {
                               onClick={() => { setFormLogoType(slug); setShowIconPicker(false); setIconSearchQuery(''); }}
                               title={title}
                               className={`flex flex-col items-center gap-1 p-1.5 rounded-xl border transition-all hover:bg-white/5 ${
-                                formLogoType === slug ? 'border-[#00dce5]/60 bg-[#00dce5]/5' : 'border-transparent'
+                                formLogoType === slug ? 'border-[var(--color-accent)]/60 bg-[var(--color-accent)]/5' : 'border-transparent'
                               }`}>
                               <div className="w-8 h-8 flex items-center justify-center rounded-lg">
                                 <BrandLogo name={title} logoType={slug} className="w-6 h-6 text-[9px]" />
@@ -3764,16 +4126,16 @@ export default function App() {
               {/* QR Camera */}
               <div className="mb-5">
                 {isCameraActive ? (
-                  <div className="space-y-3 bg-black/50 p-4 rounded-2xl border border-[#00dce5]/30">
+                  <div className="space-y-3 bg-black/50 p-4 rounded-2xl border border-[var(--color-accent)]/30">
                     <div className="relative aspect-video w-full rounded-xl overflow-hidden bg-[#0e0e0e] border border-white/10 flex flex-col items-center justify-center">
                       <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" />
-                      <div className="absolute inset-0 border-[5px] border-[#00dce5]/25 m-8 rounded-lg pointer-events-none border-dashed" />
-                      <Camera className="w-7 h-7 text-[#00dce5] relative z-10" />
+                      <div className="absolute inset-0 border-[5px] border-[var(--color-accent)]/25 m-8 rounded-lg pointer-events-none border-dashed" />
+                      <Camera className="w-7 h-7 text-[var(--color-accent)] relative z-10" />
                       <p className="text-xs text-white relative z-10 mt-2 font-mono bg-black/60 px-3 py-1 rounded">{cameraStatus}</p>
                     </div>
                     <div className="flex gap-2 justify-center">
                       <button type="button" onClick={injectScannedQRResult}
-                        className="text-xs bg-[#00dce5] text-black font-semibold px-4 py-2 rounded-xl flex items-center gap-1.5">
+                        className="text-xs bg-[var(--color-accent)] text-black font-semibold px-4 py-2 rounded-xl flex items-center gap-1.5">
                         Use Sample Key
                       </button>
                       <button type="button" onClick={stopCameraScan} className="text-xs bg-white/10 text-white px-4 py-2 rounded-xl">Stop</button>
@@ -3781,7 +4143,7 @@ export default function App() {
                   </div>
                 ) : (
                   <button type="button" onClick={startCameraScan}
-                    className="w-full py-3 rounded-xl bg-[#00dce5]/5 border border-[#00dce5]/20 hover:border-[#00dce5]/40 text-xs text-[#00dce5] flex items-center justify-center gap-2 font-semibold transition-all">
+                    className="w-full py-3 rounded-xl bg-[var(--color-accent)]/5 border border-[var(--color-accent)]/20 hover:border-[var(--color-accent)]/40 text-xs text-[var(--color-accent)] flex items-center justify-center gap-2 font-semibold transition-all">
                     <Camera className="w-4 h-4" /> Scan QR Code
                   </button>
                 )}
@@ -3808,23 +4170,23 @@ export default function App() {
     if (match) setFormLogoType(match.slug);
   }
 }} placeholder="e.g. GitHub"
-                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
+                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">Account</label>
                     <input type="text" required value={formEmail} onChange={e => setFormEmail(e.target.value)} placeholder="e.g. user@example.com"
-                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
+                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
                   </div>
                 </div>
 
                 <div className="space-y-1.5">
                   <label className="text-[10px] uppercase font-semibold text-[#8e90a2] flex justify-between">
                     <span>Secret</span>
-                    <button type="button" onClick={handleGenerateSecret} className="text-[#00dce5] hover:underline">Generate</button>
+                    <button type="button" onClick={handleGenerateSecret} className="text-[var(--color-accent)] hover:underline">Generate</button>
                   </label>
                   <div className="relative">
                     <input type={showSecret ? "text" : "password"} required value={formSecret} onChange={e => setFormSecret(e.target.value)} placeholder="e.g. JBSWY3DPEHPK3PXP"
-                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 pr-10 text-xs text-white font-mono uppercase focus:outline-none focus:border-[#00dce5]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
+                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 pr-10 text-xs text-white font-mono uppercase focus:outline-none focus:border-[var(--color-accent)]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
                     <button type="button" onClick={handleToggleFormSecretVisibility} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8e90a2] hover:text-white transition-colors">
                       {showSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
@@ -3844,12 +4206,12 @@ export default function App() {
                         setIsCreatingNewTagInModal(false);
                       }
                     }}
-                      className="w-full bg-[#1c1b1b] border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 transition-all">
+                      className="w-full bg-[#1c1b1b] border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/60 transition-all">
                       {settings.customTags
                         .filter(t => t.toLowerCase() !== 'hide' && t.toLowerCase() !== 'hidden')
                         .concat(isHiddenVaultActive ? ['hidden'] : [])
                         .map(t => <option key={t} value={t} className="bg-[#1c1b1b] text-white">{t}</option>)}
-                      <option value="__NEW_TAG__" className="text-[#00dce5] font-semibold">+ Add New Tag...</option>
+                      <option value="__NEW_TAG__" className="text-[var(--color-accent)] font-semibold">+ Add New Tag...</option>
                     </select>
                     {isCreatingNewTagInModal && (
                       <div className="mt-2 flex gap-2 animate-fade-in">
@@ -3858,7 +4220,7 @@ export default function App() {
                           value={newTagNameInModal}
                           onChange={e => setNewTagNameInModal(e.target.value)}
                           placeholder="New tag..."
-                          className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 text-[10px] text-white focus:outline-none focus:border-[#00dce5]/60 focus:bg-white/[0.08] transition-all"
+                          className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 text-[10px] text-white focus:outline-none focus:border-[var(--color-accent)]/60 focus:bg-white/[0.08] transition-all"
                         />
                         <button
                           type="button"
@@ -3876,7 +4238,7 @@ export default function App() {
                             setIsCreatingNewTagInModal(false);
                             showToast(`Tag "${tag}" created.`, 'success');
                           }}
-                          className="px-2.5 py-1.5 bg-[#00dce5] text-black text-[9px] font-bold rounded-lg hover:opacity-90 transition-opacity"
+                          className="px-2.5 py-1.5 bg-[var(--color-accent)] text-black text-[9px] font-bold rounded-lg hover:opacity-90 transition-opacity"
                         >
                           Add
                         </button>
@@ -3896,7 +4258,7 @@ export default function App() {
                   <div className="space-y-1.5">
                     <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">Labels</label>
                     <input type="text" value={formTagsString} onChange={e => setFormTagsString(e.target.value)} placeholder="prod, core"
-                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
+                      className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
                   </div>
                 </div>
 
@@ -3907,7 +4269,7 @@ export default function App() {
                     <select
                       value={formAlgorithm}
                       onChange={e => setFormAlgorithm(e.target.value as any)}
-                      className="w-full bg-[#1c1b1b] border border-white/10 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-[#00dce5]/60"
+                      className="w-full bg-[#1c1b1b] border border-white/10 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/60"
                     >
                       <option value="SHA1">SHA-1 (Default)</option>
                       <option value="SHA256">SHA-256</option>
@@ -3920,7 +4282,7 @@ export default function App() {
                     <select
                       value={formPeriod}
                       onChange={e => setFormPeriod(parseInt(e.target.value, 10))}
-                      className="w-full bg-[#1c1b1b] border border-white/10 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-[#00dce5]/60"
+                      className="w-full bg-[#1c1b1b] border border-white/10 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/60"
                     >
                       <option value={30}>30s (Default)</option>
                       <option value={60}>60s</option>
@@ -3932,7 +4294,7 @@ export default function App() {
                     <select
                       value={formDigits}
                       onChange={e => setFormDigits(parseInt(e.target.value, 10))}
-                      className="w-full bg-[#1c1b1b] border border-white/10 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-[#00dce5]/60"
+                      className="w-full bg-[#1c1b1b] border border-white/10 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/60"
                     >
                       <option value={6}>6 Digits (Default)</option>
                       <option value={8}>8 Digits</option>
@@ -3943,14 +4305,14 @@ export default function App() {
                 <div className="space-y-1.5">
                   <label className="text-[10px] uppercase font-semibold text-[#8e90a2]">Key Rotation Reminder Date</label>
                   <input type="date" value={formNextRotationDate} onChange={e => setFormNextRotationDate(e.target.value)}
-                    className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
+                    className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
                 </div>
 
                 <textarea rows={2} value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="Notes (optional)"
-                  className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#00dce5]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
+                  className="w-full bg-gradient-to-br from-white/[0.03] to-white/[0.07] backdrop-blur-md border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/60 focus:bg-white/[0.08] transition-all placeholder-[#8e90a2]" />
 
                 <label className="flex items-center gap-2.5 bg-white/5 p-3 rounded-xl border border-white/8 cursor-pointer">
-                  <input type="checkbox" checked={formIsPinned} onChange={e => setFormIsPinned(e.target.checked)} className="rounded border-white/20 text-[#00dce5] focus:ring-[#00dce5] bg-transparent" />
+                  <input type="checkbox" checked={formIsPinned} onChange={e => setFormIsPinned(e.target.checked)} className="rounded border-white/20 text-[var(--color-accent)] focus:ring-[var(--color-accent)] bg-transparent" />
                   <span className="text-xs text-[#c4c5d9]">Pin this account for quick access</span>
                 </label>
 
@@ -4081,12 +4443,12 @@ export default function App() {
         {showDuressSetup && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-sm glass-panel rounded-2xl p-6 border border-[#00dce5]/20 relative">
-              <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-[#00dce5] to-transparent" />
+              className="w-full max-w-sm glass-panel rounded-2xl p-6 border border-[var(--color-accent)]/20 relative">
+              <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-[var(--color-accent)] to-transparent" />
               
               <div className="flex items-center gap-3 mb-4">
-                <div className="w-9 h-9 rounded-xl bg-[#00dce5]/10 border border-[#00dce5]/20 flex items-center justify-center">
-                  <Shield className="w-5 h-5 text-[#00dce5]" />
+                <div className="w-9 h-9 rounded-xl bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/20 flex items-center justify-center">
+                  <Shield className="w-5 h-5 text-[var(--color-accent)]" />
                 </div>
                 <div>
                   <h3 className="font-display font-semibold text-white text-base">Setup Duress PIN</h3>
@@ -4138,7 +4500,7 @@ export default function App() {
                     value={duressSetupPin}
                     onChange={e => setDuressSetupPin(e.target.value)}
                     placeholder="Enter 4-8 digit PIN"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#00dce5]/50 transition-all placeholder-[#8e90a2] font-mono text-center tracking-widest text-lg"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/50 transition-all placeholder-[#8e90a2] font-mono text-center tracking-widest text-lg"
                   />
                 </div>
 
@@ -4152,7 +4514,7 @@ export default function App() {
                     value={duressSetupConfirm}
                     onChange={e => setDuressSetupConfirm(e.target.value)}
                     placeholder="Re-enter PIN"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#00dce5]/50 transition-all placeholder-[#8e90a2] font-mono text-center tracking-widest text-lg"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[var(--color-accent)]/50 transition-all placeholder-[#8e90a2] font-mono text-center tracking-widest text-lg"
                   />
                 </div>
 
@@ -4186,9 +4548,9 @@ export default function App() {
         {isVerificationModalOpen && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-sm glass-panel rounded-2xl p-6 border border-[#00dce5]/20">
+              className="w-full max-w-sm glass-panel rounded-2xl p-6 border border-[var(--color-accent)]/20">
               <div className="flex items-center gap-3 mb-4">
-                <Shield className="w-5 h-5 text-[#00dce5] shrink-0" />
+                <Shield className="w-5 h-5 text-[var(--color-accent)] shrink-0" />
                 <h3 className="font-display font-semibold text-white text-base">Verify Identity</h3>
               </div>
               <p className="text-xs text-[#c4c5d9] mb-4 leading-relaxed">Enter your master passphrase or master key to authorize this action.</p>
@@ -4197,7 +4559,7 @@ export default function App() {
                   <input type={showVerificationInput ? 'text' : 'password'} required autoFocus
                     value={verificationInput} onChange={e => setVerificationInput(e.target.value)}
                     placeholder="Master passphrase or master key"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#00dce5]/50 transition-all pr-10" />
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[var(--color-accent)]/50 transition-all pr-10" />
                   <button type="button" onClick={() => setShowVerificationInput(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8e90a2] hover:text-white transition-colors">
                     {showVerificationInput ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
@@ -4205,7 +4567,7 @@ export default function App() {
                 {verificationError && <p className="text-xs text-red-400 font-mono">{verificationError}</p>}
                 <div className="flex gap-2 justify-end pt-1 border-t border-white/8">
                   <button type="button" onClick={() => { setIsVerificationModalOpen(false); setPendingAction(null); }} className="px-3 py-1.5 text-xs text-[#8e90a2] hover:text-white font-semibold">Cancel</button>
-                  <button type="submit" className="px-5 py-1.5 text-xs bg-[#00dce5] text-black font-semibold rounded-lg hover:opacity-90 transition-opacity">Confirm</button>
+                  <button type="submit" className="px-5 py-1.5 text-xs bg-[var(--color-accent)] text-black font-semibold rounded-lg hover:opacity-90 transition-opacity">Confirm</button>
                 </div>
               </form>
             </motion.div>
@@ -4220,13 +4582,13 @@ export default function App() {
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
               className="w-full max-w-md glass-panel rounded-2xl p-6 border border-white/8">
               <div className="flex items-center gap-3 mb-4">
-                <Download className="w-5 h-5 text-[#00dce5] shrink-0" />
+                <Download className="w-5 h-5 text-[var(--color-accent)] shrink-0" />
                 <h3 className="font-display font-semibold text-white text-base">Confirm Export</h3>
               </div>
 
               <div className="space-y-3 mb-5">
                 <p className="text-xs text-[#c4c5d9] leading-relaxed">
-                  You are about to export <span className="text-white font-semibold">{accounts.length}</span> account{accounts.length !== 1 ? 's' : ''} as a <span className="text-[#00dce5] font-semibold">{pendingExportFormat === 'purified-json' ? 'Purified JSON' : pendingExportFormat === 'plain-text' ? 'URI Matrix (.txt)' : 'HTML Index'}</span> file.
+                  You are about to export <span className="text-white font-semibold">{accounts.length}</span> account{accounts.length !== 1 ? 's' : ''} as a <span className="text-[var(--color-accent)] font-semibold">{pendingExportFormat === 'purified-json' ? 'Purified JSON' : pendingExportFormat === 'plain-text' ? 'URI Matrix (.txt)' : 'HTML Index'}</span> file.
                 </p>
 
                 <div className="bg-white/5 border border-white/10 rounded-xl p-3.5 space-y-2">
@@ -4253,9 +4615,116 @@ export default function App() {
                 <button type="button" onClick={() => {
                   setIsExportModalOpen(false);
                   triggerVerifyAction('export', pendingExportFormat);
-                }} className="px-5 py-1.5 text-xs bg-[#00dce5] text-black font-semibold rounded-lg hover:opacity-90 transition-opacity">
+                }} className="px-5 py-1.5 text-xs bg-[var(--color-accent)] text-black font-semibold rounded-lg hover:opacity-90 transition-opacity">
                   Continue & Verify
                 </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ── MOCK WEBAUTHN / FIDO2 HARDWARE KEY REGISTRATION MODAL ── */}
+      <AnimatePresence>
+        {isWebAuthnRegistering && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-sm glass-panel rounded-3xl p-6 border border-[var(--color-accent)]/20 flex flex-col items-center gap-5 relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-[var(--color-accent)] to-transparent" />
+              
+              <div className="w-14 h-14 rounded-2xl bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/20 flex items-center justify-center text-[var(--color-accent)]">
+                <Key className="w-6 h-6 animate-bounce" />
+              </div>
+              
+              <div className="text-center space-y-1">
+                <h3 className="font-display font-semibold text-white text-base">FIDO2 Hardware Key</h3>
+                <p className="text-[10px] text-[#8e90a2] tracking-wider uppercase font-mono">WebAuthn Enrollment Simulator</p>
+              </div>
+
+              <div className="w-full space-y-4">
+                <WebAuthnRegFlow 
+                  keyName={webAuthnRegKeyName} 
+                  onCancel={() => {
+                    setIsWebAuthnRegistering(false);
+                    setWebAuthnRegKeyName('');
+                  }}
+                  onComplete={(newKey) => {
+                    setSettings(prev => ({ ...prev, securityKeys: [...prev.securityKeys, newKey] }));
+                    setIsWebAuthnRegistering(false);
+                    setWebAuthnRegKeyName('');
+                    showToast(`Hardware Key "${newKey.name}" enrolled successfully.`, 'success');
+                  }}
+                />
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ── MOCK WEBAUTHN / FIDO2 HARDWARE KEY AUTHENTICATION MODAL ── */}
+      <AnimatePresence>
+        {isWebAuthnAuthenticating && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-sm glass-panel rounded-3xl p-6 border border-[var(--color-accent)]/20 flex flex-col items-center gap-5 relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-[var(--color-accent)] to-transparent" />
+              
+              <div className="w-14 h-14 rounded-2xl bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/20 flex items-center justify-center text-[var(--color-accent)]">
+                <Key className="w-6 h-6 animate-pulse" />
+              </div>
+              
+              <div className="text-center space-y-1">
+                <h3 className="font-display font-semibold text-white text-base">FIDO2 Key Authentication</h3>
+                <p className="text-[10px] text-[#8e90a2] tracking-wider uppercase font-mono">WebAuthn Verification Simulator</p>
+              </div>
+
+              <div className="w-full space-y-4">
+                <WebAuthnAuthFlow 
+                  onCancel={() => setIsWebAuthnAuthenticating(false)}
+                  onComplete={() => {
+                    setIsWebAuthnAuthenticating(false);
+                    safeTransition(() => {
+                      setIsLocked(false);
+                      if (settings.pinAttempts > 0) {
+                        setSettings(prev => ({ ...prev, pinAttempts: 0 }));
+                      }
+                    });
+                    showToast('Vault successfully unlocked via FIDO2 Security Key.', 'success');
+                  }}
+                />
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ── MOCK BIOMETRIC SIMULATION MODAL ── */}
+      <AnimatePresence>
+        {isBiometricSimulating && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-sm glass-panel rounded-3xl p-6 border border-[var(--color-accent)]/20 flex flex-col items-center gap-5 relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-[var(--color-accent)] to-transparent" />
+              
+              <div className="text-center space-y-1">
+                <h3 className="font-display font-semibold text-white text-base">Biometric Verification</h3>
+                <p className="text-[10px] text-[#8e90a2] tracking-wider uppercase font-mono">Mock Device Authenticator</p>
+              </div>
+
+              <div className="w-full space-y-4">
+                <BiometricsFlow 
+                  onCancel={() => setIsBiometricSimulating(false)}
+                  onComplete={() => {
+                    setIsBiometricSimulating(false);
+                    safeTransition(() => {
+                      setIsLocked(false);
+                      if (settings.pinAttempts > 0) {
+                        setSettings(prev => ({ ...prev, pinAttempts: 0 }));
+                      }
+                    });
+                    showToast('Vault successfully unlocked via Biometrics.', 'success');
+                  }}
+                />
               </div>
             </motion.div>
           </div>
@@ -4281,7 +4750,7 @@ export default function App() {
               }`}
             >
               <div className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${
-                toast.type === 'success' ? 'bg-emerald-400' : toast.type === 'error' ? 'bg-red-400' : 'bg-[#00dce5]'
+                toast.type === 'success' ? 'bg-emerald-400' : toast.type === 'error' ? 'bg-red-400' : 'bg-[var(--color-accent)]'
               }`} />
               <p className={`text-xs leading-relaxed ${
                 toast.type === 'success' ? 'text-emerald-100' : toast.type === 'error' ? 'text-red-200' : 'text-[#c4c5d9]'

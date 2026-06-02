@@ -10,13 +10,14 @@ use crypto::{
 };
 use storage::{
     load_vault_data, save_vault_data,
-    write_audit_log, read_audit_logs
+    write_audit_log, read_audit_logs, export_file
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             validate_base32,
             generate_secret,
@@ -33,8 +34,10 @@ pub fn run() {
             set_window_screenshot_protection,
             encrypt_metadata,
             decrypt_metadata,
-            validate_import_payload
+            validate_import_payload,
+            export_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
