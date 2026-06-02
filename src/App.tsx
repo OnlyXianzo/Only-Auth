@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, FormEvent, ChangeEvent, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo, FormEvent, ChangeEvent, useCallback } from 'react';
 import {
   Lock, Shield, Search, Plus, LockOpen, Briefcase,
   Edit3, Copy, Trash2, Pin, Check, X, ShieldCheck,
@@ -1073,6 +1073,21 @@ export default function App() {
   const [totpCodes, setTotpCodes] = useState<Record<string, string>>({});
   const [totpLoading, setTotpLoading] = useState(true);
 
+  // ⚡ Perf: totpEpoch only changes when the TOTP time window rolls over (every ~30s),
+  // not every 1-second tick. This eliminates ~29/30 batch crypto operations per period.
+  // Uses the minimum period across all accounts to ensure the fastest-rotating code
+  // triggers a refresh in time.
+  const totpEpoch = useMemo(() => {
+    const minPeriod = accounts.length > 0
+      ? Math.min(...accounts.map(a => a.period || 30))
+      : 30;
+    const now = Math.floor(Date.now() / 1000) + (settings.timeOffsetSeconds || 0);
+    return Math.floor(now / minPeriod);
+    // tick is intentionally included so this re-evaluates each second,
+    // but the returned epoch value only actually changes every minPeriod seconds
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tick, accounts, settings.timeOffsetSeconds]);
+
   useEffect(() => {
     let isCurrent = true;
     const updateTokens = async () => {
@@ -1096,7 +1111,7 @@ export default function App() {
     };
     updateTokens();
     return () => { isCurrent = false; };
-  }, [tick, accounts]);
+  }, [totpEpoch, accounts]);
 
   // ── Focus guard
   useEffect(() => {
@@ -1891,18 +1906,33 @@ export default function App() {
     setTimeout(() => setChatMessages(prev => [...prev, { sender: 'system', text: reply, time }]), 700);
   };
 
-  // ── Computed
+  // ── Computed (memoized to avoid redundant O(n) filtering on every 1-second tick re-render)
   const c = settings.compactMode;
-  const visibleAccounts = isFakeVaultActive ? [] : accounts.filter(acc => {
-    const isHidden = acc.category.toLowerCase() === 'hide' || acc.category.toLowerCase() === 'hidden';
-    return isHiddenVaultActive || !isHidden;
-  });
-  const filteredAccounts = visibleAccounts.filter(acc => {
-    const matchesTag = activeTag === 'all' || acc.category === activeTag;
-    const q = searchQuery.toLowerCase();
-    const matchesSearch = !q || acc.name.toLowerCase().includes(q) || acc.email.toLowerCase().includes(q) || (acc.tags?.some(t => t.toLowerCase().includes(q)));
-    return matchesTag && matchesSearch;
-  });
+
+  // ⚡ Perf: visibleAccounts only changes when accounts/vault state change, not on tick
+  const visibleAccounts = useMemo(() => {
+    if (isFakeVaultActive) return [];
+    return accounts.filter(acc => {
+      const isHidden = acc.category.toLowerCase() === 'hide' || acc.category.toLowerCase() === 'hidden';
+      return isHiddenVaultActive || !isHidden;
+    });
+  }, [accounts, isFakeVaultActive, isHiddenVaultActive]);
+
+  // ⚡ Perf: filteredAccounts only changes when visible accounts, tag, or search change
+  const filteredAccounts = useMemo(() => {
+    return visibleAccounts.filter(acc => {
+      const matchesTag = activeTag === 'all' || acc.category === activeTag;
+      const q = searchQuery.toLowerCase();
+      const matchesSearch = !q || acc.name.toLowerCase().includes(q) || acc.email.toLowerCase().includes(q) || (acc.tags?.some(t => t.toLowerCase().includes(q)));
+      return matchesTag && matchesSearch;
+    });
+  }, [visibleAccounts, activeTag, searchQuery]);
+
+  // ⚡ Perf: pinnedAccounts eliminates duplicate .filter(a => a.isPinned) in JSX render path
+  const pinnedAccounts = useMemo(() => {
+    return visibleAccounts.filter(a => a.isPinned);
+  }, [visibleAccounts]);
+
   const focusedAccount = visibleAccounts.find(a => a.id === focusedAccountId) || visibleAccounts[0] || null;
   const focusedCode = focusedAccount ? (totpCodes[focusedAccount.id] || '------') : '------';
   const focusedCodeFormatted = formatFocusedCode(focusedCode);
@@ -2898,7 +2928,7 @@ export default function App() {
                   )}
 
                    {/* Pinned accounts */}
-                  {visibleAccounts.filter(a => a.isPinned).length > 0 && (
+                  {pinnedAccounts.length > 0 && (
                     <div className="space-y-3">
                       <p className="text-[9px] uppercase tracking-[0.2em] font-bold text-[#8e90a2]">Pinned Accounts</p>
                       <div className="relative">
@@ -2906,7 +2936,7 @@ export default function App() {
                         <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-16 z-10"
                           style={{ background: 'linear-gradient(to right, transparent, #050505)' }} />
                         <div className="flex gap-4 overflow-x-auto pb-2 no-scrollbar" style={{ paddingBottom: '12px', paddingTop: '12px' }}>
-                        {visibleAccounts.filter(a => a.isPinned).map(acc => {
+                        {pinnedAccounts.map(acc => {
                           const pCode = totpCodes[acc.id] || '------';
                           const isSelected = focusedAccountId === acc.id;
                           const cardColor = acc.color || getServiceHex(acc.logoType);

@@ -13,8 +13,6 @@ AGENTS.md
 GEMINI.md
 .agents
 .antigravitycli
-public/brands/_data/
-public/brands/icons/
 public/brands/icons_svg/
 .claude-flow/
 .claude/
@@ -22,7 +20,6 @@ public/brands/icons_svg/
 .swarm/
 CLAUDE.md
 ruvector.db
-GEMINI.md
 *.bak
 .gemini/
 .opencode/
@@ -31,3 +28,4 @@ system-prompt-antigravity.md
 system-prompt-gemini.md
 system-prompt-opencode.md
 .hive-mind/
+.jules/
