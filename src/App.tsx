@@ -552,6 +552,40 @@ function BiometricsFlow({ onCancel, onComplete }: { onCancel: () => void; onComp
   );
 }
 
+
+// ─── Account Footer Subcomponent ─────────────────────────────────────────────
+function AccountFooter({ focusedAccount, c, focusedCode, handleCopyCode }: { focusedAccount: any, c: boolean, focusedCode: string, handleCopyCode: (id: string, code: string) => void }) {
+  const accountPeriod = focusedAccount.period || 30;
+  const [accountSecondsRemaining, setAccountSecondsRemaining] = useState(accountPeriod - (Math.floor(Date.now() / 1000) % accountPeriod));
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setAccountSecondsRemaining(accountPeriod - (Math.floor(Date.now() / 1000) % accountPeriod));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [accountPeriod]);
+
+  return (
+    <div className={`flex flex-col gap-3 border-t border-white/5 ${c ? 'pt-3' : 'pt-4'} relative z-10`}>
+      {!c && focusedAccount.notes && (
+        <p className="text-xs text-[#c4c5d9] leading-relaxed italic">{focusedAccount.notes}</p>
+      )}
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-[#8e90a2]">Refreshes in <span className="font-mono text-white font-semibold">{accountSecondsRemaining}s</span></span>
+        {focusedAccount.secret && focusedAccount.secret.trim() !== "" && (
+          <button onClick={() => handleCopyCode(focusedAccount.id, focusedCode)}
+            className="flex items-center gap-1 text-[var(--color-accent)] hover:text-white transition-colors">
+            <Copy className="w-3.5 h-3.5" /> <span>Copy Code</span>
+          </button>
+        )}
+      </div>
+      <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+        <div className="h-full progress-bar-inner bg-[var(--color-accent)]" style={{ width: `${(accountSecondsRemaining / accountPeriod) * 100}%` }} />
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ────────────────────────────────────────────────────────────────
 export default function App() {
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -1065,30 +1099,35 @@ export default function App() {
     };
   }, []);
 
-  // ── Timer (1-second tick for all time-dependent updates)
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick(t => t + 1), 1000);
-    return () => clearInterval(id);
-  }, []);
-
   // ── Batched TOTP codes from Rust backend
   const [totpCodes, setTotpCodes] = useState<Record<string, string>>({});
 
   // ⚡ Perf: totpEpoch only changes when the TOTP time window rolls over (every ~30s),
-  // not every 1-second tick. This eliminates ~29/30 batch crypto operations per period.
+  // This eliminates batch crypto operations per period.
   // Uses the minimum period across all accounts to ensure the fastest-rotating code
   // triggers a refresh in time.
-  const totpEpoch = useMemo(() => {
+  const [totpEpoch, setTotpEpoch] = useState(() => {
     const minPeriod = accounts.length > 0
       ? Math.min(...accounts.map(a => a.period || 30))
       : 30;
     const now = Math.floor(Date.now() / 1000) + (settings.timeOffsetSeconds || 0);
     return Math.floor(now / minPeriod);
-    // tick is intentionally included so this re-evaluates each second,
-    // but the returned epoch value only actually changes every minPeriod seconds
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tick, accounts, settings.timeOffsetSeconds]);
+  });
+
+  useEffect(() => {
+    const minPeriod = accounts.length > 0
+      ? Math.min(...accounts.map(a => a.period || 30))
+      : 30;
+
+    // Check every second to see if epoch needs updating
+    const id = setInterval(() => {
+      const now = Math.floor(Date.now() / 1000) + (settings.timeOffsetSeconds || 0);
+      const newEpoch = Math.floor(now / minPeriod);
+      setTotpEpoch(prev => (prev !== newEpoch ? newEpoch : prev));
+    }, 1000);
+
+    return () => clearInterval(id);
+  }, [accounts, settings.timeOffsetSeconds]);
 
   useEffect(() => {
     let isCurrent = true;
@@ -1923,10 +1962,10 @@ export default function App() {
     setTimeout(() => setChatMessages(prev => [...prev, { sender: 'system', text: reply, time }]), 700);
   };
 
-  // ── Computed (memoized to avoid redundant O(n) filtering on every 1-second tick re-render)
+  // ── Computed (memoized to avoid redundant O(n) filtering on re-render)
   const c = settings.compactMode;
 
-  // ⚡ Perf: visibleAccounts only changes when accounts/vault state change, not on tick
+  // ⚡ Perf: visibleAccounts only changes when accounts/vault state change
   const visibleAccounts = useMemo(() => {
     if (isFakeVaultActive) return [];
     return accounts.filter(acc => {
@@ -2911,29 +2950,12 @@ export default function App() {
                       </div>
 
                       {/* Footer */}
-                      {(() => {
-                        const accountPeriod = focusedAccount.period || 30;
-                        const accountSecondsRemaining = accountPeriod - (Math.floor(Date.now() / 1000) % accountPeriod);
-                        return (
-                          <div className={`flex flex-col gap-3 border-t border-white/5 ${c ? 'pt-3' : 'pt-4'} relative z-10`}>
-                            {!c && focusedAccount.notes && (
-                              <p className="text-xs text-[#c4c5d9] leading-relaxed italic">{focusedAccount.notes}</p>
-                            )}
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="text-[#8e90a2]">Refreshes in <span className="font-mono text-white font-semibold">{accountSecondsRemaining}s</span></span>
-                              {focusedAccount.secret && focusedAccount.secret.trim() !== "" && (
-                                <button onClick={() => handleCopyCode(focusedAccount.id, focusedCode)}
-                                  className="flex items-center gap-1 text-[var(--color-accent)] hover:text-white transition-colors">
-                                  <Copy className="w-3.5 h-3.5" /> <span>Copy Code</span>
-                                </button>
-                              )}
-                            </div>
-                            <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
-                              <div className="h-full progress-bar-inner bg-[var(--color-accent)]" style={{ width: `${(accountSecondsRemaining / accountPeriod) * 100}%` }} />
-                            </div>
-                          </div>
-                        );
-                      })()}
+                      <AccountFooter
+                        focusedAccount={focusedAccount}
+                        c={c}
+                        focusedCode={focusedCode}
+                        handleCopyCode={handleCopyCode}
+                      />
                     </div>
                   ) : (
                     <div className="glass-panel rounded-3xl p-10 text-center flex flex-col items-center gap-4 text-[#8e90a2]">
