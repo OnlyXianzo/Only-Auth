@@ -633,7 +633,10 @@ export default function App() {
   useEffect(() => {
     const applyScreenshotProtection = async () => {
       const protect = settings.screenshotProtection !== false;
-      await setWindowScreenshotProtection(protect);
+      const res = await setWindowScreenshotProtection(protect);
+      if (protect && !res.success && res.warning) {
+        showToast(res.warning, 'info');
+      }
     };
     applyScreenshotProtection();
   }, [settings.screenshotProtection]);

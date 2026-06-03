@@ -402,14 +402,19 @@ export async function validateImportPayload(payload: string): Promise<{ accounts
   }
 }
 
-export async function setWindowScreenshotProtection(protect: boolean): Promise<void> {
+export async function setWindowScreenshotProtection(
+  protect: boolean
+): Promise<{ success: boolean; warning?: string }> {
   const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
-  if (isTauri) {
-    try {
-      await invoke('set_window_screenshot_protection', { protect });
-    } catch (e) {
-      console.error('Tauri set_window_screenshot_protection failed:', e);
-    }
+  if (!isTauri) {
+    return { success: false, warning: 'Not running in Tauri environment' };
+  }
+  try {
+    await invoke('set_window_screenshot_protection', { protect });
+    return { success: true };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { success: false, warning: msg };
   }
 }
 

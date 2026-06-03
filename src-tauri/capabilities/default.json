@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "allow-app-commands"
+    "allow-app-commands",
+    "core:window:allow-set-content-protected"
   ]
 }
