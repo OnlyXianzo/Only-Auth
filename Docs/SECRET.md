@@ -1,35 +1,75 @@
-# Security and Safety Features
+# Security and safety features
 
-This document details the advanced safety mechanisms integrated into Only Auth to protect your most sensitive data in high-risk environments.
+This document details the advanced safety mechanisms integrated into Only Auth
+to protect your most sensitive data in high-risk environments.
 
-## Ghost Mode (Hidden Vault)
+## Ghost Mode (hidden vault)
+
+Ghost Mode is a specialized vault partitioning mechanism providing plausible
+deniability. It allows you to maintain secondary accounts that remain
+completely hidden under standard operating conditions.
 
 ### What it is
-Ghost Mode is a specialized "vault within a vault" designed for plausible deniability. It allows you to maintain a set of accounts that are completely invisible during normal operation.
+
+Ghost Mode is a "vault within a vault" designed for plausible deniability.
+It lets you keep a set of accounts completely invisible during standard
+operation.
 
 ### Who it is for
-This feature is intended for journalists, activists, or security professionals who may be forced to reveal their primary vault but need to keep certain critical credentials hidden.
 
-### How to Access
-1.  **Creation:** To create a hidden vault, go to the Tags settings and create a tag named `hidden` or `hide`. You will be prompted to set a secondary passcode (PIN, passphrase, or master key).
-2.  **Assignment:** Assign sensitive accounts to this `hidden` tag. They will immediately vanish from your main dashboard and all lists.
-3.  **Unlocking:** To reveal these accounts, type your hidden vault passcode directly into the dashboard's **Search Bar**.
-4.  **Auto-Seal:** The vault will automatically re-seal the moment you navigate away, search for something else, or the application window loses focus.
+This feature is intended for journalists, activists, or security professionals
+who may be forced to reveal their primary vault but need to keep certain
+critical credentials hidden.
 
-## Duress and Panic Systems
+### How to access
 
-### Duress PIN/Passphrase
-In high-pressure situations where you are forced to unlock the application, you can enter a pre-configured **Duress PIN**.
-*   **Wipe Action:** Silently triggers a complete wipe of the application's local database and settings.
-*   **Fake Vault Action:** Opens a pre-configured "fake" empty vault, making it appear as if you have no accounts.
+To set up and access Ghost Mode, follow these steps:
 
-### PIN Lockout (Anti-Brute Force)
-To prevent unauthorized access via PIN guessing, Only Auth enforces a strict lockout policy:
-*   **5 Failed Attempts:** After 5 consecutive incorrect PIN entries, the quick-unlock PIN is permanently disabled.
-*   **Recovery:** Access can only be restored using your full **Master Recovery Passphrase**. Once restored, you must configure a new PIN.
+1. On the **Settings** page, select the **Tags** menu.
+2. Create a tag named `hidden` or `hide`.
+3. When prompted, configure a secondary passcode (PIN, passphrase, or master
+   key).
+4. Assign sensitive accounts to the newly created tag to hide them from the
+   dashboard.
+5. Type your secondary passcode directly into the dashboard **search bar** to
+   reveal the hidden accounts.
+6. Change the search query, navigate away, or unfocus the window to
+   automatically reseal the partition.
 
-## Operational Privacy
+## Duress and panic systems
 
-*   **Window Protection:** The application utilizes platform-native APIs to prevent its window from appearing in screenshots, video recordings, or screen shares.
-*   **Focus Masking:** When the application window is not active, it is immediately obscured by a blur overlay to prevent shoulder-surfing.
-*   **Memory Scrubbing:** All secret data is strictly scrubbed from system RAM using Rust's `zeroize` protocols immediately after use, ensuring no trace is left for memory-dumping tools.
+The application incorporates emergency controls to handle forced disclosure
+scenarios and automated brute-force defense.
+
+### Duress PIN or passphrase
+
+In high-pressure situations where you are forced to unlock the application,
+you can enter a pre-configured duress PIN.
+
+- **Wipe trigger:** Entering the duress PIN silently deletes the key databases
+  and overwrites the SQLCipher headers on disk.
+- **Decoy trigger:** Entering the duress PIN opens a pre-configured fake empty
+  vault, presenting no visible accounts.
+
+### PIN lockout and anti-brute force
+
+To prevent unauthorized access via PIN guessing, Only Auth enforces a strict
+lockout policy.
+
+- **Lockout trigger:** The quick-unlock PIN is permanently disabled after 5
+  consecutive incorrect attempts.
+- **Recovery method:** You must enter the full Master Recovery Passphrase to
+  restore access and configure a new PIN.
+
+## Operational privacy
+
+Only Auth enforces device-level visual and memory protection measures during
+active user sessions.
+
+- **Window protection:** The application utilizes platform-native APIs to
+  prevent its window from appearing in screenshots, video recordings, or
+  screen shares.
+- **Focus masking:** The UI immediately applies a clinical blur overlay when
+  the window loses active focus, preventing shoulder-surfing.
+- **Memory scrubbing:** The backend zeroizes all sensitive secrets in RAM
+  immediately after TOTP token generation.

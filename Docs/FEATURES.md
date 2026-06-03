@@ -1,4 +1,4 @@
-# Application Features
+# Application features
 
 Only Auth provides a comprehensive set of security and organizational tools
 designed for professional credential management.
@@ -8,54 +8,57 @@ designed for professional credential management.
 > These features are in a very early beta state. You may encounter errors or
 > unexpected behavior as we continue to refine the implementation.
 
-## Security and Privacy
+## Security and privacy
 
 The application includes several advanced mechanisms to protect your vault in
 high-risk scenarios.
 
-### Hidden Keys
+### Ghost Mode (hidden vault)
 
-Hidden Keys (formerly Ghost Mode) allows you to create an invisible vault layer.
-You can tag accounts as `hidden` to exclude them from standard views.
+Ghost Mode (Hidden Vault) lets you create an invisible vault partition for
+plausible deniability under forced disclosure.
 
-- **Invisible Operation:** Accounts tagged as `hidden` do not appear in lists
-  or search results by default.
-- **Secure Unlocking:** You can only reveal Hidden Keys by entering a specific
-  passcode directly into the dashboard search bar.
-- **Automatic Resealing:** The hidden vault layer automatically reseals when
-  the application loses focus or you navigate away from the dashboard.
+- **Invisible operation:** Accounts tagged with `hidden` or `hide` do not
+  appear in your standard dashboard list or search queries.
+- **Search bar unlock:** You reveal the hidden partition by typing your
+  secondary passcode directly into the dashboard search bar.
+- **Automatic resealing:** The hidden partition automatically seals itself if
+  you change the search query, navigate to another page, or lose window focus.
 
-### Duress Mechanisms
+### Duress mechanisms
 
-The system provides protections for situations where you may be forced to
-unlock your device.
+The application implements built-in protections to safeguard your data during
+physical coercion.
 
-- **Duress PIN:** You can configure a secondary PIN that triggers a silent
-  wipe of the vault or displays a decoy empty state.
-- **Lockout Policy:** The system enforces a lockout after 5 consecutive
-  incorrect PIN attempts, requiring your master recovery phrase to reset.
+- **Duress PIN:** You can configure a secondary PIN that silently wipes the
+  cryptographic keys and database or opens a decoy empty vault.
+- **Lockout threshold:** Entering an incorrect PIN 5 consecutive times
+  permanently disables PIN-based quick-unlock, requiring your Master Recovery
+  Passphrase to restore access.
 
-### Privacy Protections
+### Privacy protections
 
-The interface includes built-in safeguards to prevent accidental data leaks.
+Only Auth protects your credentials against visual snooping, screen recording,
+and clipboard leaks during daily use.
 
-- **Anti-Screenshot:** Native hooks block unauthorized screen captures of the
-  vault content.
-- **Active Masking:** The UI applies a clinical blur overlay whenever the
-  application window loses focus.
-- **Clipboard Management:** The system automatically clears copied TOTP codes
-  from your clipboard after 30 seconds.
+- **Screen capture block:** Native OS-level integrations prevent screenshots
+  and video recordings of the application window.
+- **Focus masking:** The application applies a clinical blur overlay
+  immediately when the window loses focus, blocking shoulder-surfing.
+- **Clipboard clearing:** The system automatically deletes copied TOTP codes
+  from the clipboard after 30 seconds.
 
 ## Organization and UX
 
 Only Auth combines high-security features with a professional, streamlined
 user experience.
 
-- **Dynamic Tagging:** You can categorize and filter your accounts using
-  customizable tags instead of traditional folders.
-- **Clinical UI:** The interface uses glassmorphism and micro-animations to
-  provide a clear, responsive, and professional experience.
-- **Unified Generation:** The Rust backend generates all visible TOTP codes
-  in a single pass, ensuring zero UI lag and accurate synchronization.
-- **Seamless Migration:** You can import existing data from Google
+- **Dynamic tagging:** You organize accounts using flexible, customizable tags
+  instead of rigid directory structures.
+- **Minimalist interface:** The UI utilizes sub-pixel hairline accents, clean
+  typography, and responsive micro-animations to support efficient
+  interaction.
+- **Unified generation:** The native backend calculates all active TOTP codes
+  in a single operation, keeping display rendering synchronized and lag-free.
+- **Credential import:** You can migrate existing accounts from Google
   Authenticator, Bitwarden, Ente Auth, and Microsoft Authenticator.
