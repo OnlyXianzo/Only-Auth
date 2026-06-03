@@ -310,7 +310,9 @@ pub fn set_window_screenshot_protection(window: tauri::Window, protect: bool) ->
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportValidationResult {
+    /// List of accounts parsed from the import payload.
     pub accounts: Vec<serde_json::Value>,
+    /// Any warnings generated during validation (e.g. stripped credentials).
     pub warnings: Vec<String>,
 }
 
@@ -379,6 +381,10 @@ pub fn encrypt_metadata(data: String, key_material: String) -> Result<String, St
     Ok(payload)
 }
 
+/// Decrypts encrypted metadata payload utilizing the derived key material.
+///
+/// # Errors
+/// Returns an error string if decryption or HEX decoding fails.
 #[tauri::command]
 pub fn decrypt_metadata(encrypted: String, key_material: String) -> Result<String, String> {
     let parts: Vec<&str> = encrypted.split(':').collect();

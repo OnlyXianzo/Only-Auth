@@ -14,6 +14,8 @@ use storage::{
     write_audit_log, read_audit_logs, export_file
 };
 
+/// The main entry point to run the Tauri application, registering plugins,
+/// handlers, and initializing the main window setup hooks.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()

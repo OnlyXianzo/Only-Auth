@@ -1,6 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 
+/**
+ * Recursively search for a file in a directory.
+ * @param dir The directory to search.
+ * @param fileName The name of the file to find.
+ */
 function findFile(dir: string, fileName: string): string | null {
   if (!fs.existsSync(dir)) return null;
   const files = fs.readdirSync(dir);
@@ -19,10 +24,13 @@ function findFile(dir: string, fileName: string): string | null {
 
 const androidDir = path.resolve(__dirname, '../src-tauri/gen/android');
 
+// skipcq: JS-0002
 console.log('Searching for Android project files under:', androidDir);
 
 if (!fs.existsSync(androidDir)) {
+  // skipcq: JS-0002
   console.error('\n[ERROR] src-tauri/gen/android directory not found.');
+  // skipcq: JS-0002
   console.error('Please run "bunx tauri android init" first on a system with Android SDK/NDK.');
   process.exit(1);
 }
@@ -30,26 +38,31 @@ if (!fs.existsSync(androidDir)) {
 // 1. Patch AndroidManifest.xml
 const manifestPath = findFile(androidDir, 'AndroidManifest.xml');
 if (manifestPath) {
+  // skipcq: JS-0002
   console.log('Found AndroidManifest.xml at:', manifestPath);
   let content = fs.readFileSync(manifestPath, 'utf8');
 
   // Check if camera permission is already there
   if (!content.includes('android.permission.CAMERA')) {
-    const permissionTag = `\n    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />`;
+    const permissionTag = "\n    <uses-permission android:name=\"android.permission.CAMERA\" />\n    <uses-feature android:name=\"android.hardware.camera\" android:required=\"false\" />";
     // Insert after <manifest ...>
     content = content.replace(/(<manifest[^>]*>)/, `$1${permissionTag}`);
     fs.writeFileSync(manifestPath, content, 'utf8');
+    // skipcq: JS-0002
     console.log('Successfully added Camera permission to AndroidManifest.xml');
   } else {
+    // skipcq: JS-0002
     console.log('Camera permission already exists in AndroidManifest.xml');
   }
 } else {
+  // skipcq: JS-0002
   console.error('[ERROR] AndroidManifest.xml not found.');
 }
 
 // 2. Patch MainActivity.kt
 const activityPath = findFile(androidDir, 'MainActivity.kt');
 if (activityPath) {
+  // skipcq: JS-0002
   console.log('Found MainActivity.kt at:', activityPath);
   
   const patchedActivity = `package com.onlyauth.app
@@ -110,7 +123,9 @@ class MainActivity : TauriActivity() {
 }
 `;
   fs.writeFileSync(activityPath, patchedActivity, 'utf8');
+  // skipcq: JS-0002
   console.log('Successfully patched MainActivity.kt with FLAG_SECURE and camera permission bridge.');
 } else {
+  // skipcq: JS-0002
   console.error('[ERROR] MainActivity.kt not found.');
 }
