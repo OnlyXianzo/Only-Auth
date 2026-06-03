@@ -2932,7 +2932,7 @@ export default function App() {
                   )}
 
                   {focusedAccount ? (
-                    <div className={`glass-panel-accent rounded-3xl relative overflow-hidden focus-card-transition group border-l-4 ${isHiddenVaultActive ? 'border-l-amber-500 shadow-[4px_0_20px_-6px_rgba(251,191,36,0.25)]' : 'border-l-[var(--color-accent)] shadow-[4px_0_20px_-6px_rgba(var(--color-accent-rgb),0.25)]'}`}
+                    <div className={`glass-panel-accent rounded-3xl relative overflow-hidden focus-card-transition group border-l-4 ${isHiddenVaultActive ? 'border-l-amber-500 shadow-[4px_0_20px_-6px_rgba(251,191,36,0.25)]' : 'border-l-accent shadow-[4px_0_20px_-6px_rgba(var(--color-accent-rgb),0.25)]'}`}
                       style={{ padding: compact ? '1.25rem' : '2rem' }}>
                       <div className={`card-bg-blur ${isHiddenVaultActive ? 'bg-amber-500/10' : 'bg-[var(--color-accent)]/10'}`} />
 
