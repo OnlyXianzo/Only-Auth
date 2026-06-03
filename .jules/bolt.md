@@ -1,3 +1,0 @@
-## 2025-02-28 - Root level interval trigger causes severe App re-renders
-**Learning:** Having a 1-second interval (`setInterval`) at the root `App` component that updates state (like a `tick` variable) causes the entire React application to re-render every second. Even if heavy logic is memoized, the Virtual DOM diffing across the whole app can be a significant performance bottleneck.
-**Action:** Extract fast-updating UI components (like a 1-second countdown timer) into smaller, isolated components that maintain their own internal state/intervals. For app-level time-dependent state, only update the state when it logically needs to change (e.g. updating `totpEpoch` every 30 seconds rather than every second).
