@@ -23,7 +23,9 @@ import {
   exportPurifiedJSON, exportPlainTextURI, exportHTML,
   buildSealedPayload, parseSealedPayload,
   parseOnlyAuthJSON, parseOTPAuthBatch,
+  parseOTPAuthURI,
 } from './utils/exportEngine';
+import { Html5Qrcode } from 'html5-qrcode';
 
 // ─── BIP-39 Mini Wordlist (256 common words for demo — real apps use full 2048) ───
 const BIP39_WORDS = [
@@ -503,61 +505,17 @@ function WebAuthnAuthFlow({ onCancel, onComplete }: { onCancel: () => void; onCo
   );
 }
 
-// ─── Biometrics Mock Authentication Subcomponent ───
-function BiometricsFlow({ onCancel, onComplete }: { onCancel: () => void; onComplete: () => void }) {
-  const [step, setStep] = useState<'scanning' | 'ready' | 'success'>('scanning');
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setStep('ready');
-    }, 1500); // Pulse scan line for 1.5s
-    return () => clearTimeout(timer);
-  }, []);
-
-  const handleTapScanner = () => {
-    setStep('success');
-    setTimeout(() => {
-      onComplete();
-    }, 1000);
-  };
-
-  if (step === 'scanning') {
-    return (
-      <div className="flex flex-col items-center gap-4 text-center py-4">
-        <div className="relative w-20 h-20 flex items-center justify-center">
-          <Fingerprint className="w-12 h-12 text-[var(--color-accent)] animate-pulse" />
-          <div className="absolute inset-0 border-2 border-dashed border-[var(--color-accent)]/30 rounded-full animate-spin" style={{ animationDuration: '4s' }} />
-        </div>
-        <p className="text-xs text-[#c4c5d9] animate-pulse">Initializing hardware biometric engine...</p>
-        <button type="button" onClick={onCancel} className="mt-2 text-xs text-[#8e90a2] hover:text-white transition-colors">Cancel</button>
-      </div>
-    );
-  }
-
-  if (step === 'ready') {
-    return (
-      <div className="flex flex-col items-center gap-4 text-center py-4 animate-fade-in">
-        <button
-          type="button"
-          onClick={handleTapScanner}
-          className="relative w-20 h-20 rounded-full bg-[var(--color-accent)]/10 border border-[var(--color-accent)] flex items-center justify-center cursor-pointer hover:bg-[var(--color-accent)]/20 animate-bounce active:scale-95 transition-all text-[var(--color-accent)]"
-        >
-          <Fingerprint className="w-10 h-10" />
-        </button>
-        <p className="text-xs text-white font-semibold">Ready to verify.</p>
-        <p className="text-[10px] text-[#c4c5d9]">Tap the scanner above to complete biometric verification.</p>
-        <button type="button" onClick={onCancel} className="mt-1 text-xs text-[#8e90a2] hover:text-white transition-colors">Cancel</button>
-      </div>
-    );
-  }
-
+// ─── Biometrics Authentication Status Subcomponent ───
+function BiometricsFlow({ onCancel }: { onCancel: () => void }) {
   return (
-    <div className="flex flex-col items-center gap-3 py-4 animate-fade-in text-center">
-      <div className="w-10 h-10 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 animate-pulse">
-        <Check className="w-5 h-5" />
+    <div className="flex flex-col items-center gap-4 text-center py-4">
+      <div className="relative w-20 h-20 flex items-center justify-center">
+        <Fingerprint className="w-12 h-12 text-[var(--color-accent)] animate-pulse" />
+        <div className="absolute inset-0 border-2 border-dashed border-[var(--color-accent)]/30 rounded-full animate-spin" style={{ animationDuration: '4s' }} />
       </div>
-      <p className="text-xs text-emerald-400 font-semibold font-mono">Biometrics Authenticated!</p>
-      <p className="text-[10px] text-[#8e90a2]">Access granted.</p>
+      <p className="text-xs text-[#c4c5d9]">Waiting for hardware biometric verification...</p>
+      <p className="text-[10px] text-[#8e90a2]">Please scan your fingerprint or verify your face using the native system dialog.</p>
+      <button type="button" onClick={onCancel} className="mt-2 text-xs text-[#8e90a2] hover:text-white transition-colors">Use Passphrase</button>
     </div>
   );
 }
@@ -843,7 +801,21 @@ export default function App() {
 
   // Check biometrics support
   useEffect(() => {
-    setBiometricsSupported(true);
+    const checkSupport = async () => {
+      const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
+      if (isTauri) {
+        try {
+          const supported = await invoke<boolean>('is_biometric_supported');
+          setBiometricsSupported(supported);
+        } catch (e) {
+          console.error("Biometrics support check failed:", e);
+          setBiometricsSupported(false);
+        }
+      } else {
+        setBiometricsSupported(false);
+      }
+    };
+    checkSupport();
   }, []);
 
   // ── Auto-Lock on Inactivity + Window Blur Security effects
@@ -1011,7 +983,7 @@ export default function App() {
   const [formNextRotationDate, setFormNextRotationDate] = useState('');
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraStatus, setCameraStatus] = useState('');
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const html5QrcodeScannerRef = useRef<Html5Qrcode | null>(null);
   const pinInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const formSecretRef = useRef<string>('');
@@ -1570,9 +1542,44 @@ export default function App() {
     await verifyAndUnlock(input, unlockMethod === 'pin' ? 'pin' : 'passphrase');
   };
 
-  const handleBiometricUnlock = () => {
+  const handleBiometricUnlock = async () => {
     setUnlockError('');
     setIsBiometricSimulating(true);
+    try {
+      const supported = await invoke<boolean>('is_biometric_supported');
+      if (!supported) {
+        setUnlockError('Biometrics is not supported or configured on this device. Falling back to passphrase.');
+        setUnlockMethod('passphrase');
+        setIsBiometricSimulating(false);
+        return;
+      }
+      const verified = await invoke<boolean>('verify_biometric', { reason: 'Unlock your Only Auth Vault' });
+      if (verified) {
+        const retrieved = await invoke<string>('get_secure_credential', { key: 'biometric_vault_key' });
+        if (retrieved) {
+          setIsBiometricSimulating(false);
+          const unlocked = await verifyAndUnlock(retrieved, 'passphrase');
+          if (unlocked) {
+            showToast('Vault successfully unlocked via Biometrics.', 'success');
+          } else {
+            setUnlockError('Failed to decrypt vault with stored biometric credential. Please enter your passphrase.');
+            setUnlockMethod('passphrase');
+          }
+        } else {
+          setUnlockError('Biometric credential not found. Please re-enable biometrics in settings.');
+          setUnlockMethod('passphrase');
+          setIsBiometricSimulating(false);
+        }
+      } else {
+        setUnlockError('Biometric verification failed.');
+        setIsBiometricSimulating(false);
+      }
+    } catch (err) {
+      console.error(err);
+      setUnlockError('Biometric authentication error: ' + err);
+      setUnlockMethod('passphrase');
+      setIsBiometricSimulating(false);
+    }
   };
 
   const handleHardwareUnlock = () => {
@@ -1707,6 +1714,31 @@ export default function App() {
             setNewPassphraseWords([]);
             showToast('Passphrase updated. Use your new passphrase to unlock.', 'success');
           });
+        } else if (pendingAction?.type === 'enable-biometrics') {
+          (async () => {
+            try {
+              const supported = await invoke<boolean>('is_biometric_supported');
+              if (!supported) {
+                showToast('Biometric authentication is not supported or not configured on this device.', 'error');
+                return;
+              }
+              const verified = await invoke<boolean>('verify_biometric', { reason: 'Authorize Only Auth biometrics' });
+              if (verified) {
+                await invoke('store_secure_credential', { key: 'biometric_vault_key', value: input });
+                setSettings(prev => ({
+                  ...prev,
+                  appLockMethod: 'biometrics',
+                  appLockEnabled: true
+                }));
+                showToast('Biometrics lock enabled successfully.', 'success');
+              } else {
+                showToast('Biometric verification failed.', 'error');
+              }
+            } catch (err) {
+              console.error(err);
+              showToast('Failed to enable biometrics: ' + err, 'error');
+            }
+          })();
         } else if (pendingAction?.type === 'update-pin') {
           const pinData = pendingAction.data as { newPin: string };
           const newPin = pinData.newPin;
@@ -1788,36 +1820,77 @@ export default function App() {
   };
 
   // ── Camera
+  const handleScannedQR = (decodedText: string) => {
+    try {
+      const parsed = parseOTPAuthURI(decodedText);
+      if (parsed && parsed.secret) {
+        setFormName(parsed.name || '');
+        setFormEmail(parsed.email || '');
+        setFormSecret(parsed.secret);
+        setFormLogoType(parsed.logoType || 'custom');
+        setFormAlgorithm(parsed.algorithm || 'SHA1');
+        setFormDigits(parsed.digits || 6);
+        setFormPeriod(parsed.period || 30);
+        setFormNotes(`Imported via QR scan on ${new Date().toLocaleDateString()}`);
+        if (parsed.category) setFormCategory(parsed.category);
+        
+        showToast('QR Code scanned successfully!', 'success');
+        stopCameraScan();
+      } else {
+        showToast('Invalid QR code content. Must be a valid totp URI.', 'error');
+      }
+    } catch (e) {
+      showToast('Failed to parse scanned QR code.', 'error');
+    }
+  };
+
   const startCameraScan = async () => {
     setIsCameraActive(true);
     setCameraStatus('Requesting camera...');
-    try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('SecureContextError');
+    
+    setTimeout(async () => {
+      try {
+        const qrScanner = new Html5Qrcode('qr-reader');
+        html5QrcodeScannerRef.current = qrScanner;
+        
+        await qrScanner.start(
+          { facingMode: 'environment' },
+          {
+            fps: 10,
+            qrbox: (width, height) => {
+              const min = Math.min(width, height);
+              return { width: Math.floor(min * 0.7), height: Math.floor(min * 0.7) };
+            }
+          },
+          (decodedText) => {
+            handleScannedQR(decodedText);
+          },
+          () => {
+            // Verbose scan frame errors can be ignored
+          }
+        );
+        setCameraStatus('Point camera at the QR code.');
+      } catch (err) {
+        console.error('Camera start error:', err);
+        setCameraStatus('No camera found or access failed.');
       }
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play(); }
-      setCameraStatus('Point camera at the QR code.');
-    } catch (e) {
-      if (e instanceof Error) {
-        if (e.message === 'SecureContextError') {
-          setCameraStatus('Security Error: Camera requires an HTTPS connection or localhost context.');
-        } else if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
-          setCameraStatus('Permission Denied: Please grant camera access in browser or settings.');
-        } else {
-          setCameraStatus('No camera found or access failed. Please upload a QR code image.');
-        }
-      } else {
-        setCameraStatus('No camera found or access failed. Please upload a QR code image.');
-      }
-    }
+    }, 100);
   };
-  const stopCameraScan = () => {
-    if (videoRef.current?.srcObject) {
-      (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
+
+  const stopCameraScan = async () => {
+    if (html5QrcodeScannerRef.current) {
+      try {
+        if (html5QrcodeScannerRef.current.isScanning) {
+          await html5QrcodeScannerRef.current.stop();
+        }
+      } catch (err) {
+        console.error('Failed to stop html5Qrcode scanner:', err);
+      }
+      html5QrcodeScannerRef.current = null;
     }
     setIsCameraActive(false);
   };
+
   const injectScannedQRResult = async () => {
     const names = ['Google Cloud', 'GitHub Actions', 'Stripe API', 'Vercel Deploy', 'AWS Console'];
     const logos: Account['logoType'][] = ['google', 'github', 'stripe', 'custom', 'aws'];
@@ -4033,7 +4106,13 @@ export default function App() {
                         <p className="text-sm font-semibold text-white">Enable App Lock</p>
                         <p className="text-xs text-[#8e90a2] mt-0.5">Use a secondary fast unlock method on startup</p>
                       </div>
-                      <button onClick={() => setSettings(prev => ({ ...prev, appLockEnabled: !prev.appLockEnabled }))}
+                      <button onClick={async () => {
+                        const nextVal = !settings.appLockEnabled;
+                        if (!nextVal) {
+                          await invoke('delete_secure_credential', { key: 'biometric_vault_key' }).catch(() => {});
+                        }
+                        setSettings(prev => ({ ...prev, appLockEnabled: nextVal }));
+                      }}
                         className={`relative w-10 h-6 rounded-full transition-colors ${settings.appLockEnabled ? 'bg-[var(--color-accent)]' : 'bg-white/10'}`}>
                         <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${settings.appLockEnabled ? 'left-5' : 'left-1'}`} />
                       </button>
@@ -4051,10 +4130,21 @@ export default function App() {
                             const isSelected = settings.appLockMethod === option.id;
                             return (
                               <button key={option.id}
-                                onClick={() => {
+                                onClick={async () => {
                                   if (option.id === 'pin' && !settings.pinHash) {
                                     showToast('Please set up a PIN in the section below first.', 'error');
                                     return;
+                                  }
+                                  if (option.id === 'biometrics') {
+                                    if (!biometricsSupported) {
+                                      showToast('Biometrics is not supported or not enrolled on this device.', 'error');
+                                      return;
+                                    }
+                                    triggerVerifyAction('enable-biometrics');
+                                    return;
+                                  }
+                                  if (settings.appLockMethod === 'biometrics') {
+                                    await invoke('delete_secure_credential', { key: 'biometric_vault_key' }).catch(() => {});
                                   }
                                   setSettings(prev => ({ ...prev, appLockMethod: option.id }));
                                 }}
@@ -4264,7 +4354,7 @@ export default function App() {
                 {isCameraActive ? (
                   <div className="space-y-3 bg-black/50 p-4 rounded-2xl border border-[var(--color-accent)]/30">
                     <div className="relative aspect-video w-full rounded-xl overflow-hidden bg-[#0e0e0e] border border-white/10 flex flex-col items-center justify-center">
-                      <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" />
+                      <div id="qr-reader" className="absolute inset-0 w-full h-full overflow-hidden" />
                       <div className="absolute inset-0 border-[5px] border-[var(--color-accent)]/25 m-8 rounded-lg pointer-events-none border-dashed" />
                       <Camera className="w-7 h-7 text-[var(--color-accent)] relative z-10" />
                       <p className="text-xs text-white relative z-10 mt-2 font-mono bg-black/60 px-3 py-1 rounded">{cameraStatus}</p>
@@ -4866,16 +4956,9 @@ export default function App() {
 
               <div className="w-full space-y-4">
                 <BiometricsFlow 
-                  onCancel={() => setIsBiometricSimulating(false)}
-                  onComplete={() => {
+                  onCancel={() => {
                     setIsBiometricSimulating(false);
-                    safeTransition(() => {
-                      setIsLocked(false);
-                      if (settings.pinAttempts > 0) {
-                        setSettings(prev => ({ ...prev, pinAttempts: 0 }));
-                      }
-                    });
-                    showToast('Vault successfully unlocked via Biometrics.', 'success');
+                    setUnlockMethod('passphrase');
                   }}
                 />
               </div>

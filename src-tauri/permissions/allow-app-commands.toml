@@ -18,6 +18,12 @@ commands.allow = [
   "encrypt_metadata",
   "decrypt_metadata",
   "validate_import_payload",
-  "export_file"
+  "export_file",
+  "is_biometric_supported",
+  "verify_biometric",
+  "store_secure_credential",
+  "get_secure_credential",
+  "delete_secure_credential"
 ]
+
 

@@ -1,5 +1,6 @@
 mod crypto;
 mod storage;
+mod biometrics;
 
 use tauri::Manager;
 use crypto::{
@@ -12,6 +13,10 @@ use crypto::{
 use storage::{
     load_vault_data, save_vault_data,
     write_audit_log, read_audit_logs, export_file
+};
+use biometrics::{
+    is_biometric_supported, verify_biometric,
+    store_secure_credential, get_secure_credential, delete_secure_credential
 };
 
 /// The main entry point to run the Tauri application, registering plugins,
@@ -44,7 +49,12 @@ pub fn run() {
             encrypt_metadata,
             decrypt_metadata,
             validate_import_payload,
-            export_file
+            export_file,
+            is_biometric_supported,
+            verify_biometric,
+            store_secure_credential,
+            get_secure_credential,
+            delete_secure_credential
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
