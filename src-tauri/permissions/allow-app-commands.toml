@@ -23,7 +23,11 @@ commands.allow = [
   "verify_biometric",
   "store_secure_credential",
   "get_secure_credential",
-  "delete_secure_credential"
+  "delete_secure_credential",
+  "store_biometric_key",
+  "retrieve_biometric_key",
+  "delete_biometric_key",
+  "is_biometric_enrolled"
 ]
 
 
