@@ -5203,13 +5203,16 @@ export default function App() {
                   onCancel={() => setIsWebAuthnAuthenticating(false)}
                   onComplete={() => {
                     setIsWebAuthnAuthenticating(false);
+                    // WebAuthn proves physical key possession but does NOT derive a vault key.
+                    // Require passphrase verification as the credential check — the hardware key
+                    // serves as a second factor, not a standalone unlock mechanism.
+                    showToast('Security key verified. Enter your passphrase to complete unlock.', 'info');
                     safeTransition(() => {
-                      setIsLocked(false);
+                      setUnlockMethod('passphrase');
                       if (settings.pinAttempts > 0) {
                         setSettings(prev => ({ ...prev, pinAttempts: 0 }));
                       }
                     });
-                    showToast('Vault successfully unlocked via Security Key / Passkey.', 'success');
                   }}
                 />
               </div>
