@@ -109,6 +109,11 @@ function getServiceColors(logoType: string) {
   return SERVICE_COLORS[logoType] || SERVICE_COLORS['custom'];
 }
 
+/**
+ * Checks if a rotation date has passed or is due today.
+ * @param dateStr Optional ISO date string.
+ * @returns True if due, false otherwise.
+ */
 const isRotationDue = (dateStr?: string) => {
   if (!dateStr) return false;
   const targetDate = new Date(dateStr);
@@ -241,6 +246,9 @@ function BrandLogo({ name, logoType, className = "w-10 h-10 text-xs" }: BrandLog
     setImgSrc(`/brands/icons/${resolvedType}.svg`);
   }, [logoType]);
 
+  /**
+   * Handles service logo loading errors.
+   */
   const handleError = () => {
     setFailedSvg(true);
     setImgSrc(null);
@@ -343,9 +351,12 @@ function WebAuthnRegFlow({ keyName, onCancel, onComplete }: { keyName: string; o
       }, 200);
       return () => clearInterval(interval);
     }
-    return;
+    return () => {};
   }, [step]);
 
+  /**
+   * Handles touch interaction on mock FIDO2 hardware key.
+   */
   const handleTouchKey = () => {
     const randomId = Array.from(crypto.getRandomValues(new Uint8Array(16)))
       .map(b => b.toString(16).padStart(2, '0')).join('');
@@ -407,8 +418,8 @@ function WebAuthnRegFlow({ keyName, onCancel, onComplete }: { keyName: string; o
         <p>type: {mockCred?.type}</p>
         <p>rawId: {mockCred?.rawId.substring(0, 16)}...</p>
         <div className="text-zinc-400 pt-1">response: &#123;</div>
-        <p className="pl-3 text-zinc-500">clientDataJSON: "{mockCred?.response.clientDataJSON.substring(0, 24)}..."</p>
-        <p className="pl-3 text-zinc-500">attestationObject: "{mockCred?.response.attestationObject.substring(0, 24)}..."</p>
+        <p className="pl-3 text-zinc-500">clientDataJSON: &quot;{mockCred?.response.clientDataJSON.substring(0, 24)}...&quot;</p>
+        <p className="pl-3 text-zinc-500">attestationObject: &quot;{mockCred?.response.attestationObject.substring(0, 24)}...&quot;</p>
         <div className="text-zinc-400">&#125;</div>
       </div>
       <p className="text-xs text-[#c4c5d9] text-center">FIDO2 key registered with client signature.</p>
@@ -454,9 +465,12 @@ function WebAuthnAuthFlow({ onCancel, onComplete }: { onCancel: () => void; onCo
       }, 200);
       return () => clearInterval(interval);
     }
-    return;
+    return () => {};
   }, [step]);
 
+  /**
+   * Handles touch interaction on mock biometrics sensor.
+   */
   const handleTouchKey = () => {
     setStep('success');
     setTimeout(() => {
@@ -557,6 +571,11 @@ function AccountFooter({ focusedAccount, compact, focusedCode, handleCopyCode }:
 // ─── Main App ────────────────────────────────────────────────────────────────
 export default function App() {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  /**
+   * Displays a temporary notification toast.
+   * @param message Notification message.
+   * @param type Severity of the notification.
+   */
   const showToast = (message: string, type: ToastType = 'info') => {
     const id = `toast-${Date.now()}-${Math.random()}`;
     setToasts(prev => [...prev.slice(-3), { id, message, type }]);
@@ -579,7 +598,22 @@ export default function App() {
   const [webAuthnRegKeyName, setWebAuthnRegKeyName] = useState('');
   const [isBiometricSimulating, setIsBiometricSimulating] = useState(false);
 
+  // Transition safety
+  const [isTransitioning, setIsTransitioning] = useState(false);
+  const safeTransition = useCallback((fn: () => void) => {
+    if (isTransitioning) return;
+    setIsTransitioning(true);
+    try {
+      fn();
+    } finally {
+      setTimeout(() => { setIsTransitioning(false); }, 50);
+    }
+  }, [isTransitioning]);
+
   useEffect(() => {
+    /**
+     * Initializes app database and configuration on startup.
+     */
     const bootData = async () => {
       const saved = await loadVaultData();
       setAccounts(saved);
@@ -588,6 +622,9 @@ export default function App() {
     bootData();
   }, []);
 
+  /**
+   * Controls OS-level window screen recording and screenshot capture blocking.
+   */
   useEffect(() => {
     const applyScreenshotProtection = async () => {
       const protect = settings.screenshotProtection !== false;
@@ -608,20 +645,6 @@ export default function App() {
     }
   }, [accounts, isAccountsLoaded, decryptedLogKeyHex]);
   useEffect(() => { localStorage.setItem('onlyauth_settings_v3', JSON.stringify(settings)); }, [settings]);
-
-  // ── Auth state
-  const isFirstRun = (!settings.authHashes || settings.authHashes.length === 0) && !settings.passphraseHash;
-  const [isLocked, setIsLocked] = useState(true);
-  const [isGeneratingKey, setIsGeneratingKey] = useState(false);
-  const [isUnlocking, setIsUnlocking] = useState(false);
-
-  useEffect(() => {
-    if (isLocked) {
-      setIsFakeVaultActive(false);
-      setIsHiddenVaultActive(false);
-      setDecryptedLogKeyHex('');
-    }
-  }, [isLocked]);
 
   // ── Mobile Responsive & UX State Variables
   const [isMobileSearchExpanded, setIsMobileSearchExpanded] = useState<boolean>(false);
@@ -652,7 +675,27 @@ export default function App() {
   const [partitionConfirm, setPartitionConfirm] = useState<string>('');
   const [partitionError, setPartitionError] = useState<string>('');
 
+  // ── Auth state
+  const isFirstRun = (!settings.authHashes || settings.authHashes.length === 0) && !settings.passphraseHash;
+  const [isLocked, setIsLocked] = useState(true);
+  const [isGeneratingKey, setIsGeneratingKey] = useState(false);
+  const [isUnlocking, setIsUnlocking] = useState(false);
+
+  // ── Cryptographic partition automatic lock sync
+  useEffect(() => {
+    if (isLocked) {
+      setIsFakeVaultActive(false);
+      setIsHiddenVaultActive(false);
+      setDecryptedLogKeyHex('');
+    }
+  }, [isLocked]);
+
   // ── Mock Tauri Invoke cryptographic boundary
+  /**
+   * Verifies potential hidden vault access keys.
+   * @param input Raw search term.
+   * @returns Promise resolving to boolean match.
+   */
   const verifyHiddenCredentials = async (input: string): Promise<boolean> => {
     // Mock Tauri invoke fallback if tauri is not available
     try {
@@ -671,6 +714,10 @@ export default function App() {
     return hash === settings.hiddenVaultSettings.hash || hash === settings.passphraseHash || hash === settings.masterKeyHash;
   };
 
+  /**
+   * Submits hidden vault setup form.
+   * @param e Form submit event.
+   */
   const handleSetupHiddenVault = async (e: FormEvent) => {
     e.preventDefault();
     setHiddenVaultSetupError('');
@@ -788,6 +835,9 @@ export default function App() {
   }, [accent]);
 
   useEffect(() => {
+    /**
+     * Updates screen responsive states based on window width.
+     */
     const handleResize = () => {
       setIsMobileScreen(window.innerWidth < 640);
       if (window.innerWidth < 768) {
@@ -801,6 +851,9 @@ export default function App() {
 
   // Check biometrics support
   useEffect(() => {
+    /**
+     * Detects system biometric availability.
+     */
     const checkSupport = async () => {
       const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
       if (isTauri) {
@@ -822,8 +875,11 @@ export default function App() {
   const lastActivityRef = useRef<number>(Date.now());
 
   useEffect(() => {
-    if (isLocked) return;
+    if (isLocked) return () => {};
 
+    /**
+     * Updates the last active timestamp to prevent auto-lock timeout.
+     */
     const handleUserActivity = () => {
       lastActivityRef.current = Date.now();
     };
@@ -861,6 +917,9 @@ export default function App() {
 
   // Window Focus/Blur Handling
   useEffect(() => {
+    /**
+     * Triggers lock screen blur or auto-lock on window focus loss.
+     */
     const handleBlur = () => {
       setIsWindowBlurred(true);
       if (!isLocked && settings.instantLockOnBlur) {
@@ -874,10 +933,16 @@ export default function App() {
       }
     };
 
+    /**
+     * Removes lock screen blur overlay on window focus restore.
+     */
     const handleFocus = () => {
       setIsWindowBlurred(false);
     };
 
+    /**
+     * Updates window blur status based on document visibility changes.
+     */
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
         setIsWindowBlurred(true);
@@ -893,6 +958,9 @@ export default function App() {
     // Tauri-native focus change listener wrapping
     let unlistenBlur: (() => void) | undefined;
     let unlistenFocus: (() => void) | undefined;
+    /**
+     * Configures platform focus-lost handlers via Tauri backend window APIs.
+     */
     const setupTauriListeners = async () => {
       try {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -934,11 +1002,18 @@ export default function App() {
   }, [sidebarWidth]);
 
   useEffect(() => {
-    if (!isResizing) return;
+    if (!isResizing) return () => {};
+    /**
+     * Tracks drag event for resizing the sidebar.
+     * @param e Mouse movement event.
+     */
     const doDrag = (e: MouseEvent) => {
       const newWidth = Math.max(180, Math.min(450, e.clientX));
       setSidebarWidth(newWidth);
     };
+    /**
+     * Ends sidebar resizing drag gesture.
+     */
     const stopDrag = () => {
       setIsResizing(false);
     };
@@ -1046,17 +1121,7 @@ export default function App() {
   const [newKeyName, setNewKeyName] = useState('');
   const [isAddingHardwareKey, setIsAddingHardwareKey] = useState(false);
 
-  // Transition safety
-  const [isTransitioning, setIsTransitioning] = useState(false);
-  const safeTransition = useCallback((fn: () => void) => {
-    if (isTransitioning) return;
-    setIsTransitioning(true);
-    try {
-      fn();
-    } finally {
-      setTimeout(() => { setIsTransitioning(false); }, 50);
-    }
-  }, [isTransitioning]);
+
 
   // ── MEMORY SCRUBBING & RAM CLEARDOWN ──
   // Scrub views/modals secrets on lock, close, or tag/setup transitions
@@ -1153,6 +1218,9 @@ export default function App() {
 
   useEffect(() => {
     let isCurrent = true;
+    /**
+     * Regenerates totp codes for all accounts in the active compartment.
+     */
     const updateTokens = async () => {
       const allAccounts = accounts.filter(a => a.secret && a.secret.trim() !== '');
       if (allAccounts.length === 0) {
@@ -1188,8 +1256,11 @@ export default function App() {
 
   // ── Ghost Mode Search Trigger
   useEffect(() => {
-    if (!searchQuery) return;
+    if (!searchQuery) return () => {};
     let active = true;
+    /**
+     * Monitors search bar entries for stealth vault key code matches.
+     */
     const checkQuery = async () => {
       const match = await verifyHiddenCredentials(searchQuery);
       if (match && active) {
@@ -1225,8 +1296,14 @@ export default function App() {
     };
   }, [showHiddenSetupModal]);
 
-  const verifyAndUnlock = async (input: string, method: 'pin' | 'passphrase') => {
-    if (isVerifyingRef.current) return;
+  /**
+   * Core credential comparison checking.
+   * @param input Raw user input.
+   * @param method Current unlock method.
+   * @returns Boolean indicating verification status.
+   */
+  const verifyAndUnlock = async (input: string, method: 'pin' | 'passphrase'): Promise<boolean> => {
+    if (isVerifyingRef.current) return false;
     isVerifyingRef.current = true;
     setIsUnlocking(true);
     try {
@@ -1415,7 +1492,7 @@ export default function App() {
 
   // ── Recurrent Gratitude Micro-Animation
   useEffect(() => {
-    if (!settings.githubContributor) return;
+    if (!settings.githubContributor) return () => {};
     const interval = setInterval(() => {
       setIsThanksActive(true);
       setTimeout(() => {
@@ -1447,6 +1524,9 @@ export default function App() {
     setSetupStep('reveal-keys');
   });
 
+  /**
+   * Confirms recovery phrase verification step.
+   */
   const handleRevealContinue = () => safeTransition(() => {
     // Validate verification inputs
     const isCorrect = quizIndices.every((wordIdx, quizIdx) => {
@@ -1467,6 +1547,10 @@ export default function App() {
     setSetupPinPhase('enter');
   });
 
+  /**
+   * Saves passphrase configuration data on initial onboarding.
+   * @param skipPin Optional flag to skip PIN creation.
+   */
   const handleFinishSetup = async (skipPin = false) => {
     const phrase = setupWords.join(' ');
     if (!skipPin && setupPin.trim().length >= 4) {
@@ -1523,16 +1607,7 @@ export default function App() {
     }
   };
 
-  // ── Trigger biometrics automatically if active
-  useEffect(() => {
-    if (isLocked && settings.appLockEnabled && settings.appLockMethod === 'biometrics' && unlockMethod === 'biometrics') {
-      const timer = setTimeout(() => {
-        handleBiometricUnlock();
-      }, 500);
-      return () => clearTimeout(timer);
-    }
-    return;
-  }, [isLocked, settings.appLockEnabled, settings.appLockMethod, unlockMethod]);
+
 
   // ── Unlock handlers
   const handleUnlock = async (e: FormEvent) => {
@@ -1542,6 +1617,9 @@ export default function App() {
     await verifyAndUnlock(input, unlockMethod === 'pin' ? 'pin' : 'passphrase');
   };
 
+  /**
+   * Invokes native local-authentication prompt.
+   */
   const handleBiometricUnlock = async () => {
     setUnlockError('');
     setIsBiometricSimulating(true);
@@ -1582,6 +1660,20 @@ export default function App() {
     }
   };
 
+  // ── Trigger biometrics automatically if active
+  useEffect(() => {
+    if (isLocked && settings.appLockEnabled && settings.appLockMethod === 'biometrics' && unlockMethod === 'biometrics') {
+      const timer = setTimeout(() => {
+        handleBiometricUnlock();
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+    return () => {};
+  }, [isLocked, settings.appLockEnabled, settings.appLockMethod, unlockMethod]);
+
+  /**
+   * Simulates WebAuthn key detection steps.
+   */
   const handleHardwareUnlock = () => {
     setIsWebAuthnAuthenticating(true);
   };
@@ -1599,6 +1691,10 @@ export default function App() {
     setIsAddModalOpen(true);
   });
 
+  /**
+   * Populates form inputs for modifying an existing credential.
+   * @param account Target account configuration.
+   */
   const openEditModal = (account: Account) => safeTransition(() => {
     setEditingAccount(account);
     setFormName(account.name); setFormEmail(account.email); setFormSecret(account.secret); setShowSecret(false);
@@ -1614,15 +1710,26 @@ export default function App() {
     setIsAddModalOpen(true);
   });
 
+  /**
+   * Generates a cryptographically strong 160-bit fallback seed.
+   */
   const handleGenerateSecret = async () => {
     const secret = await generateNewSecret();
     if (secret) setFormSecret(secret);
   };
 
+  /**
+   * Toggles visibility of the seed value in editing form inputs.
+   */
   const handleToggleFormSecretVisibility = () => {
     setShowSecret(prev => !prev);
   };
 
+  /**
+   * Sets up verification modal details for security-sensitive actions.
+   * @param type Target action.
+   * @param data Payload parameters.
+   */
   const triggerVerifyAction = (type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock' | 'export', data?: unknown) => safeTransition(() => {
     setPendingAction({ type, data });
     setVerificationInput('');
@@ -1630,6 +1737,9 @@ export default function App() {
     setIsVerificationModalOpen(true);
   });
 
+  /**
+   * Saves a new or edited account config to local storage.
+   */
   const saveAccountConfirmed = () => {
     const parsedTags = formTagsString.split(',').map(t => t.trim()).filter(Boolean);
     const resolvedSecret = formSecret || formSecretRef.current;
@@ -1667,6 +1777,10 @@ export default function App() {
     formSecretRef.current = '';
   };
 
+  /**
+   * Deletes an account after user verification.
+   * @param id Account unique identifier.
+   */
   const deleteAccountConfirmed = (id: string) => safeTransition(() => {
     const filtered = accounts.filter(a => a.id !== id);
     setAccounts(filtered);
@@ -1675,6 +1789,10 @@ export default function App() {
     if (focusedAccountId === id && filtered.length > 0) setFocusedAccountId(filtered[0].id);
   });
 
+  /**
+   * Checks validation signature for confirmation before submitting updates.
+   * @param e Submit form event.
+   */
   const handleConfirmVerification = async (e: FormEvent) => {
     e.preventDefault();
     const input = verificationInput.trim();
@@ -1687,10 +1805,11 @@ export default function App() {
       }
       // 2. Legacy fallback checks (with PIN support)
       const hash = await sha256(input);
-      if (settings.pinHash && hash === settings.pinHash) return true;
-      if (settings.passphraseHash && hash === settings.passphraseHash) return true;
-      if (settings.masterKeyHash && hash === settings.masterKeyHash) return true;
-      return false;
+      return (
+        (!!settings.pinHash && hash === settings.pinHash) ||
+        (!!settings.passphraseHash && hash === settings.passphraseHash) ||
+        (!!settings.masterKeyHash && hash === settings.masterKeyHash)
+      );
     })();
     if (valid) {
       safeTransition(() => {
@@ -1736,7 +1855,7 @@ export default function App() {
               }
             } catch (err) {
               console.error(err);
-              showToast('Failed to enable biometrics: ' + err, 'error');
+              showToast(`Failed to enable biometrics: ${err}`, 'error');
             }
           })();
         } else if (pendingAction?.type === 'update-pin') {
@@ -1814,6 +1933,11 @@ export default function App() {
     }
   };
 
+  /**
+   * Pins or unpins an account.
+   * @param id Account ID.
+   * @param e Mouse event.
+   */
   const handleTogglePin = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setAccounts(prev => prev.map(a => a.id === id ? { ...a, isPinned: !a.isPinned } : a));
@@ -1823,7 +1947,7 @@ export default function App() {
   const handleScannedQR = (decodedText: string) => {
     try {
       const parsed = parseOTPAuthURI(decodedText);
-      if (parsed && parsed.secret) {
+      if (parsed?.secret) {
         setFormName(parsed.name || '');
         setFormEmail(parsed.email || '');
         setFormSecret(parsed.secret);
@@ -1844,7 +1968,10 @@ export default function App() {
     }
   };
 
-  const startCameraScan = async () => {
+  /**
+   * Launches local video capture and qr-code decoder.
+   */
+  const startCameraScan = () => {
     setIsCameraActive(true);
     setCameraStatus('Requesting camera...');
     
@@ -1877,6 +2004,9 @@ export default function App() {
     }, 100);
   };
 
+  /**
+   * Disables active camera capture.
+   */
   const stopCameraScan = async () => {
     if (html5QrcodeScannerRef.current) {
       try {
@@ -1891,6 +2021,9 @@ export default function App() {
     setIsCameraActive(false);
   };
 
+  /**
+   * Simulates import of a decoded QR code.
+   */
   const injectScannedQRResult = async () => {
     const names = ['Google Cloud', 'GitHub Actions', 'Stripe API', 'Vercel Deploy', 'AWS Console'];
     const logos: Account['logoType'][] = ['google', 'github', 'stripe', 'custom', 'aws'];
@@ -1918,6 +2051,10 @@ export default function App() {
     setSettings(prev => ({ ...prev, customTags: [...prev.customTags, tag] }));
     setNewTagName('');
   };
+  /**
+   * Removes a tag partition.
+   * @param tag Tag name.
+   */
   const deleteTag = (tag: string) => {
     if (['personal', 'work'].includes(tag)) return;
     setConfirmModal({
@@ -1940,6 +2077,10 @@ export default function App() {
     setNewKeyName('');
     setIsAddingHardwareKey(false);
   };
+  /**
+   * Unregisters a physical security key.
+   * @param id Security key ID.
+   */
   const deleteSecurityKey = (id: string) => {
     setSettings(prev => ({ ...prev, securityKeys: prev.securityKeys.filter(k => k.id !== id) }));
   };
@@ -1950,6 +2091,10 @@ export default function App() {
     setIsExportModalOpen(true);
   };
 
+  /**
+   * Serializes current credentials into requested format and initiates saving.
+   * @param format Export format.
+   */
   const doExport = async (format: 'purified-json' | 'plain-text' | 'html') => {
     const extMap = { 'purified-json': '.json', 'plain-text': '.txt', 'html': '.html' };
     const labelMap = { 'purified-json': 'Purified JSON', 'plain-text': 'Plain Text URIs', 'html': 'HTML' };
@@ -1987,6 +2132,10 @@ export default function App() {
     }
   };
 
+  /**
+   * Parses, decodes, and imports accounts.
+   * @param e Upload change event.
+   */
   const handleImportOnlyAuth = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return;
     const reader = new FileReader();
@@ -2013,11 +2162,18 @@ export default function App() {
     const words = generatePassphrase(12);
     setNewPassphraseWords(words);
   };
+  /**
+   * Saves a newly generated recovery phrase.
+   */
   const handleSaveNewPassphraseSubmit = () => {
     if (newPassphraseWords.length === 0) return;
     triggerVerifyAction('update-passphrase', { newPassphrase: newPassphraseWords.join(' ') });
   };
 
+  /**
+   * Saves a new pin lock code.
+   * @param e Submit form event.
+   */
   const handleUpdatePinSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (newPinField.length < 4) { showToast('PIN must be at least 4 characters.', 'error'); return; }
@@ -2025,10 +2181,16 @@ export default function App() {
     triggerVerifyAction('update-pin', { newPin: newPinField });
   };
 
+  /**
+   * Generates a new cryptographic key string.
+   */
   const handleRegenerateMasterKey = () => {
     const key = generateMasterKey();
     setNewMasterKeyField(key);
   };
+  /**
+   * Saves a new master key string.
+   */
   const handleSaveNewMasterKeySubmit = () => {
     if (!newMasterKeyField) return;
     triggerVerifyAction('update-masterkey', { newKey: newMasterKeyField });
@@ -2063,6 +2225,10 @@ export default function App() {
   const [isSupportSending, setIsSupportSending] = useState(false);
   const [supportSuccess, setSupportSuccess] = useState(false);
 
+  /**
+   * Submits a support message feedback form.
+   * @param e Form submit event.
+   */
   const handleSendSupport = (e: FormEvent) => {
     e.preventDefault();
     if (!supportMessage.trim()) return;
@@ -2076,6 +2242,10 @@ export default function App() {
     { sender: 'system', text: 'Ask me anything about 2FA, account recovery, or how to use Only Auth.', time: '00:00' }
   ]);
 
+  /**
+   * Appends user message and returns context responses.
+   * @param e Form submit event.
+   */
   const handleSendCommand = (e: FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
@@ -2315,12 +2485,15 @@ export default function App() {
                 const hidden = document.querySelector<HTMLInputElement>('#setup-pin-hidden');
                 hidden?.focus();
               }}>
-                {Array.from({ length: setupPinPhase === 'enter' ? 8 : setupPin.length }).map((_, idx) => {
+                {(setupPinPhase === 'enter'
+                  ? ['enter-0', 'enter-1', 'enter-2', 'enter-3', 'enter-4', 'enter-5', 'enter-6', 'enter-7']
+                  : Array.from({ length: setupPin.length }).map((_, i) => `confirm-${i}`)
+                ).map((dotId, idx) => {
                   const currentPin = setupPinPhase === 'enter' ? setupPin : setupPinConfirm;
                   const isFilled = currentPin.length > idx;
                   return (
                     <motion.div
-                      key={`setup-pin-dot-${idx}`}
+                      key={dotId}
                       initial={{ scale: 0.8 }}
                       animate={{
                         scale: isFilled ? 1.1 : 1,
@@ -2694,6 +2867,9 @@ export default function App() {
     { value: 'support', label: 'Support', icon: HelpCircle },
   ];
 
+  /**
+   * Handles request to view Settings area.
+   */
   const handleSettingsClick = () => {
     if (isSettingsUnlocked) {
       setActiveTag('settings');
@@ -3497,7 +3673,7 @@ export default function App() {
                         );
                       })
                     ) : (
-                      <div className="text-center text-[#8e90a2] py-4">Click "Fetch Logs" to view the encrypted trail.</div>
+                      <div className="text-center text-[#8e90a2] py-4">Click &quot;Fetch Logs&quot; to view the encrypted trail.</div>
                     )}
                   </div>
                 </div>
@@ -3736,7 +3912,7 @@ export default function App() {
                           Only Auth is a 100% open-source, local-first product built on transparency, safety, and mutual trust. We don&apos;t track you, run servers, or monetize your data. 
                         </p>
                         <p className="text-xs text-[#c4c5d9] leading-relaxed italic">
-                          "Every GitHub star, feedback contribution, or small donation keeps privacy accessible to everyone. Have you supported Only Auth by starring the repository or contributing to our community?"
+                          &quot;Every GitHub star, feedback contribution, or small donation keeps privacy accessible to everyone. Have you supported Only Auth by starring the repository or contributing to our community?&quot;
                         </p>
 
                         <div className="flex gap-2.5 mt-2">
@@ -4109,7 +4285,7 @@ export default function App() {
                       <button onClick={async () => {
                         const nextVal = !settings.appLockEnabled;
                         if (!nextVal) {
-                          await invoke('delete_secure_credential', { key: 'biometric_vault_key' }).catch(() => {});
+                          await invoke('delete_secure_credential', { key: 'biometric_vault_key' }).catch(err => { console.debug(err); });
                         }
                         setSettings(prev => ({ ...prev, appLockEnabled: nextVal }));
                       }}
@@ -4144,7 +4320,7 @@ export default function App() {
                                     return;
                                   }
                                   if (settings.appLockMethod === 'biometrics') {
-                                    await invoke('delete_secure_credential', { key: 'biometric_vault_key' }).catch(() => {});
+                                    await invoke('delete_secure_credential', { key: 'biometric_vault_key' }).catch(err => { console.debug(err); });
                                   }
                                   setSettings(prev => ({ ...prev, appLockMethod: option.id }));
                                 }}
