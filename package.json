@@ -12,6 +12,7 @@
     "patch-android": "tsx scripts/patch-android.ts"
   },
   "dependencies": {
+    "@choochmeque/tauri-plugin-biometry-api": "^0.2.8",
     "@tailwindcss/vite": "^4.1.14",
     "@tauri-apps/api": "^2.11.0",
     "@vitejs/plugin-react": "^5.0.4",

@@ -1,4 +1,3 @@
-use std::process::Command;
 use keyring::Entry;
 
 const SERVICE_NAME: &str = "only-auth-vault";
@@ -42,15 +41,6 @@ pub fn is_biometric_supported() -> bool {
 
     #[cfg(target_os = "linux")]
     {
-        // On Linux, check if fprintd-verify is in PATH
-        let output = Command::new("which")
-            .arg("fprintd-verify")
-            .output();
-        if let Ok(out) = output {
-            if out.status.success() {
-                return true;
-            }
-        }
         false
     }
 
@@ -135,17 +125,7 @@ pub async fn verify_biometric(reason: String) -> Result<bool, String> {
     #[cfg(target_os = "linux")]
     {
         let _reason = reason;
-        // Run fprintd-verify
-        let output = Command::new("fprintd-verify")
-            .output()
-            .map_err(|e| format!("Failed to execute fprintd-verify: {}", e))?;
-
-        if output.status.success() {
-            Ok(true)
-        } else {
-            let stdout_str = String::from_utf8_lossy(&output.stdout);
-            Ok(stdout_str.contains("verify-match"))
-        }
+        Err("Biometric authentication is not supported on Linux.".to_string())
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
@@ -180,7 +160,7 @@ pub fn get_secure_credential(key: String) -> Result<String, String> {
 pub fn delete_secure_credential(key: String) -> Result<(), String> {
     let entry = Entry::new(SERVICE_NAME, &key)
         .map_err(|e| format!("Keyring init failed: {}", e))?;
-    entry.delete_password()
+    entry.delete_credential()
         .map_err(|e| format!("Failed to delete credential from keyring: {}", e))?;
     Ok(())
 }

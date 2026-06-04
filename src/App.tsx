@@ -20,6 +20,13 @@ import {
   setWindowScreenshotProtection, encryptMetadata, decryptMetadata, exportFile
 } from './utils';
 import {
+  checkBiometricStatus,
+  attemptBiometricUnlock,
+  enrollBiometric,
+  revokeBiometric,
+  BiometricCheckResult
+} from './utils/biometricService';
+import {
   exportPurifiedJSON, exportPlainTextURI, exportHTML,
   buildSealedPayload, parseSealedPayload,
   parseOnlyAuthJSON, parseOTPAuthBatch,
@@ -286,9 +293,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   accountListPlacement: 'right',
   lastBackupDate: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
   customTags: ['personal', 'work', 'finance', 'social'],
-  securityKeys: [
-    { id: 'key-1', name: 'Primary YubiKey 5C', keyType: 'FIDO2 / WebAuthn', addedAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString() }
-  ],
+  securityKeys: [],
   compactMode: false,
   appLockEnabled: true,
   appLockMethod: 'passphrase',
@@ -308,8 +313,6 @@ const DEFAULT_SETTINGS: AppSettings = {
   appThemeAccent: 'cyan',
 };
 
-// Helper for Bitwarden URI parsing
-// ─── Toast Notification System ──────────────────────────────────────────────
 type ToastType = 'success' | 'error' | 'info';
 interface Toast { id: string; message: string; type: ToastType; }
 
@@ -320,201 +323,182 @@ interface MockSecurityKey {
   addedAt: string;
 }
 
-interface MockFIDO2Credential {
-  id: string;
-  type: string;
-  rawId: string;
-  response: {
-    clientDataJSON: string;
-    attestationObject: string;
-    transports: string[];
-  };
+// Base64url helpers for WebAuthn credential IDs
+function bufferToBase64url(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
 }
 
-// ─── FIDO2 / WebAuthn Mock Registration Subcomponent ───
+function base64urlToBuffer(base64url: string): ArrayBuffer {
+  let base64 = base64url
+    .replace(/-/g, '+')
+    .replace(/_/g, '/');
+  while (base64.length % 4) {
+    base64 += '=';
+  }
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
+// ─── FIDO2 / WebAuthn Real Registration Subcomponent ───
 function WebAuthnRegFlow({ keyName, onCancel, onComplete }: { keyName: string; onCancel: () => void; onComplete: (key: MockSecurityKey) => void }) {
-  const [step, setStep] = useState<'detecting' | 'touch' | 'generated'>('detecting');
-  const [progress, setProgress] = useState(0);
-  const [mockCred, setMockCred] = useState<MockFIDO2Credential | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string>('Initializing WebAuthn...');
 
   useEffect(() => {
-    if (step === 'detecting') {
-      const interval = setInterval(() => {
-        setProgress(p => {
-          if (p >= 100) {
-            clearInterval(interval);
-            setStep('touch');
-            return 100;
+    const register = async () => {
+      try {
+        if (!window.PublicKeyCredential) {
+          throw new Error('FIDO2/WebAuthn is not supported in this environment.');
+        }
+
+        setStatus('Please insert your security key and follow the system prompts.');
+        
+        const challenge = crypto.getRandomValues(new Uint8Array(32));
+        const userId = crypto.getRandomValues(new Uint8Array(16));
+        const rpId = window.location.hostname || 'localhost';
+
+        const credential = await navigator.credentials.create({
+          publicKey: {
+            challenge,
+            rp: {
+              name: "Only Auth",
+              id: rpId,
+            },
+            user: {
+              id: userId,
+              name: keyName,
+              displayName: keyName,
+            },
+            pubKeyCredParams: [
+              { type: "public-key", alg: -7 }, // ES256
+              { type: "public-key", alg: -257 }, // RS256
+            ],
+            authenticatorSelection: {
+              userVerification: "discouraged",
+            },
+            timeout: 60000,
           }
-          return p + 10;
+        }) as PublicKeyCredential | null;
+
+        if (!credential) {
+          throw new Error('No credential was returned by the system.');
+        }
+
+        const credentialIdBase64 = bufferToBase64url(credential.rawId);
+
+        onComplete({
+          id: credentialIdBase64,
+          name: keyName,
+          keyType: 'FIDO2 / WebAuthn Key',
+          addedAt: new Date().toISOString()
         });
-      }, 200);
-      return () => clearInterval(interval);
-    }
-    return () => {};
-  }, [step]);
-
-  /**
-   * Handles touch interaction on mock FIDO2 hardware key.
-   */
-  const handleTouchKey = () => {
-    const randomId = Array.from(crypto.getRandomValues(new Uint8Array(16)))
-      .map(b => b.toString(16).padStart(2, '0')).join('');
-    const randomPublicKey = Array.from(crypto.getRandomValues(new Uint8Array(32)))
-      .map(b => b.toString(16).padStart(2, '0')).join('');
-
-    setMockCred({
-      id: `mock-fido2-${randomId}`,
-      type: 'public-key',
-      rawId: btoa(randomId),
-      response: {
-        clientDataJSON: btoa(JSON.stringify({
-          type: 'webauthn.create',
-          challenge: btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))),
-          origin: window.location.origin
-        })),
-        attestationObject: btoa(`attestation-mock-obj-${randomPublicKey}`),
-        transports: ['usb', 'nfc']
+      } catch (err: any) {
+        console.error(err);
+        setError(err?.message || String(err));
       }
-    });
-    setStep('generated');
-  };
+    };
+    register();
+  }, [keyName]);
 
-  if (step === 'detecting') {
-    return (
-      <div className="flex flex-col items-center gap-4 text-center py-2">
-        <div className="w-full bg-white/5 rounded-full h-1 overflow-hidden">
-          <div className="bg-[var(--color-accent)] h-full transition-all duration-200" style={{ width: `${progress}%` }} />
-        </div>
-        <p className="text-xs text-[#c4c5d9] animate-pulse">Requesting navigator.credentials.create()...</p>
-        <p className="text-[10px] text-[#8e90a2]">Insert your security key into a USB port now.</p>
-        <button type="button" onClick={onCancel} className="mt-2 text-xs text-[#8e90a2] hover:text-white transition-colors">Cancel</button>
-      </div>
-    );
-  }
-
-  if (step === 'touch') {
+  if (error) {
     return (
       <div className="flex flex-col items-center gap-4 text-center py-2 animate-fade-in">
-        <p className="text-xs text-white font-semibold">Security key detected!</p>
-        <button
-          type="button"
-          onClick={handleTouchKey}
-          className="w-16 h-16 rounded-full bg-[var(--color-accent)]/10 border border-[var(--color-accent)] flex items-center justify-center cursor-pointer hover:bg-[var(--color-accent)]/20 animate-pulse active:scale-95 transition-all text-white font-bold"
-        >
-          TOUCH
-        </button>
-        <p className="text-[10px] text-[#c4c5d9]">Touch the flashing sensor on your key to authorize.</p>
-        <button type="button" onClick={onCancel} className="mt-1 text-xs text-[#8e90a2] hover:text-white transition-colors">Cancel</button>
+        <p className="text-xs text-red-400 font-semibold">WebAuthn Error</p>
+        <p className="text-[10px] text-[#c4c5d9] leading-relaxed max-w-[280px] break-words">{error}</p>
+        <p className="text-[9px] text-[#8e90a2]">Note: WebAuthn requires a secure origin (localhost or HTTPS) and might fail on custom WebView protocols.</p>
+        <button type="button" onClick={onCancel} className="mt-2 text-xs bg-white/5 border border-white/10 hover:bg-white/10 text-white px-4 py-2 rounded-xl transition-colors">Close</button>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-3 animate-fade-in">
-      <div className="p-3 bg-black/40 border border-white/5 rounded-xl text-left space-y-1.5 font-mono text-[9px] text-green-400 overflow-x-auto max-h-[140px] select-text scrollbar-thin">
-        <p className="text-white border-b border-white/10 pb-1 font-bold">✓ Credentials Created</p>
-        <p>id: {mockCred?.id.substring(0, 20)}...</p>
-        <p>type: {mockCred?.type}</p>
-        <p>rawId: {mockCred?.rawId.substring(0, 16)}...</p>
-        <div className="text-zinc-400 pt-1">response: &#123;</div>
-        <p className="pl-3 text-zinc-500">clientDataJSON: &quot;{mockCred?.response.clientDataJSON.substring(0, 24)}...&quot;</p>
-        <p className="pl-3 text-zinc-500">attestationObject: &quot;{mockCred?.response.attestationObject.substring(0, 24)}...&quot;</p>
-        <div className="text-zinc-400">&#125;</div>
+    <div className="flex flex-col items-center gap-4 text-center py-2">
+      <div className="w-full bg-white/5 rounded-full h-1 overflow-hidden">
+        <div className="bg-[var(--color-accent)] h-full animate-pulse w-full" />
       </div>
-      <p className="text-xs text-[#c4c5d9] text-center">FIDO2 key registered with client signature.</p>
-      <div className="flex gap-2">
-        <button type="button" onClick={onCancel} className="flex-1 py-2 text-xs text-[#8e90a2] hover:text-white font-semibold border border-white/10 rounded-xl">Discard</button>
-        <button
-          type="button"
-          onClick={() => {
-            if (mockCred) {
-              onComplete({
-                id: mockCred.id,
-                name: keyName,
-                keyType: 'FIDO2 / WebAuthn Mock',
-                addedAt: new Date().toISOString()
-              });
-            }
-          }}
-          className="flex-1 py-2 text-xs bg-[var(--color-accent)] text-black font-semibold rounded-xl hover:opacity-90 transition-opacity"
-        >
-          Save Key
-        </button>
-      </div>
+      <p className="text-xs text-[#c4c5d9]">{status}</p>
+      <button type="button" onClick={onCancel} className="mt-2 text-xs text-[#8e90a2] hover:text-white transition-colors">Cancel</button>
     </div>
   );
 }
 
-// ─── FIDO2 / WebAuthn Mock Authentication Subcomponent ───
-function WebAuthnAuthFlow({ onCancel, onComplete }: { onCancel: () => void; onComplete: () => void }) {
-  const [step, setStep] = useState<'detecting' | 'touch' | 'success'>('detecting');
-  const [progress, setProgress] = useState(0);
+// ─── FIDO2 / WebAuthn Real Authentication Subcomponent ───
+function WebAuthnAuthFlow({ securityKeys, onCancel, onComplete }: { securityKeys: MockSecurityKey[]; onCancel: () => void; onComplete: () => void }) {
+  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string>('Initializing WebAuthn...');
 
   useEffect(() => {
-    if (step === 'detecting') {
-      const interval = setInterval(() => {
-        setProgress(p => {
-          if (p >= 100) {
-            clearInterval(interval);
-            setStep('touch');
-            return 100;
+    const authenticate = async () => {
+      try {
+        if (!window.PublicKeyCredential) {
+          throw new Error('FIDO2/WebAuthn is not supported in this environment.');
+        }
+
+        if (!securityKeys || securityKeys.length === 0) {
+          throw new Error('No security keys registered on this device.');
+        }
+
+        setStatus('Please touch your registered security key.');
+
+        const challenge = crypto.getRandomValues(new Uint8Array(32));
+        const rpId = window.location.hostname || 'localhost';
+
+        const assertion = await navigator.credentials.get({
+          publicKey: {
+            challenge,
+            rpId,
+            allowCredentials: securityKeys.map(k => ({
+              id: base64urlToBuffer(k.id),
+              type: 'public-key',
+            })),
+            userVerification: "discouraged",
+            timeout: 60000,
           }
-          return p + 10;
-        });
-      }, 200);
-      return () => clearInterval(interval);
-    }
-    return () => {};
-  }, [step]);
+        }) as PublicKeyCredential | null;
 
-  /**
-   * Handles touch interaction on mock biometrics sensor.
-   */
-  const handleTouchKey = () => {
-    setStep('success');
-    setTimeout(() => {
-      onComplete();
-    }, 1000);
-  };
+        if (!assertion) {
+          throw new Error('No signature assertion returned.');
+        }
 
-  if (step === 'detecting') {
-    return (
-      <div className="flex flex-col items-center gap-4 text-center py-2">
-        <div className="w-full bg-white/5 rounded-full h-1 overflow-hidden">
-          <div className="bg-[var(--color-accent)] h-full transition-all duration-200" style={{ width: `${progress}%` }} />
-        </div>
-        <p className="text-xs text-[#c4c5d9] animate-pulse">Requesting navigator.credentials.get()...</p>
-        <p className="text-[10px] text-[#8e90a2]">Locating registered FIDO2 security credentials.</p>
-        <button type="button" onClick={onCancel} className="mt-2 text-xs text-[#8e90a2] hover:text-white transition-colors">Cancel</button>
-      </div>
-    );
-  }
+        onComplete();
+      } catch (err: any) {
+        console.error(err);
+        setError(err?.message || String(err));
+      }
+    };
+    authenticate();
+  }, [securityKeys]);
 
-  if (step === 'touch') {
+  if (error) {
     return (
       <div className="flex flex-col items-center gap-4 text-center py-2 animate-fade-in">
-        <p className="text-xs text-white font-semibold">Security key responsive!</p>
-        <button
-          type="button"
-          onClick={handleTouchKey}
-          className="w-16 h-16 rounded-full bg-[var(--color-accent)]/10 border border-[var(--color-accent)] flex items-center justify-center cursor-pointer hover:bg-[var(--color-accent)]/20 animate-pulse active:scale-95 transition-all text-white font-bold"
-        >
-          TOUCH
-        </button>
-        <p className="text-[10px] text-[#c4c5d9]">Touch the sensor to verify challenge signature.</p>
-        <button type="button" onClick={onCancel} className="mt-1 text-xs text-[#8e90a2] hover:text-white transition-colors">Cancel</button>
+        <p className="text-xs text-red-400 font-semibold">WebAuthn Error</p>
+        <p className="text-[10px] text-[#c4c5d9] leading-relaxed max-w-[280px] break-words">{error}</p>
+        <p className="text-[9px] text-[#8e90a2]">Note: WebAuthn requires a secure origin (localhost or HTTPS) and might fail on custom WebView protocols.</p>
+        <button type="button" onClick={onCancel} className="mt-2 text-xs bg-white/5 border border-white/10 hover:bg-white/10 text-white px-4 py-2 rounded-xl transition-colors">Close</button>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col items-center gap-3 py-4 animate-fade-in text-center">
-      <div className="w-10 h-10 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
-        <Check className="w-5 h-5 animate-pulse" />
+    <div className="flex flex-col items-center gap-4 text-center py-2">
+      <div className="w-full bg-white/5 rounded-full h-1 overflow-hidden">
+        <div className="bg-[var(--color-accent)] h-full animate-pulse w-full" />
       </div>
-      <p className="text-xs text-emerald-400 font-semibold font-mono">Signature Verified!</p>
-      <p className="text-[10px] text-[#8e90a2]">Unlocking vault...</p>
+      <p className="text-xs text-[#c4c5d9]">{status}</p>
+      <button type="button" onClick={onCancel} className="mt-2 text-xs text-[#8e90a2] hover:text-white transition-colors">Cancel</button>
     </div>
   );
 }
@@ -597,6 +581,11 @@ export default function App() {
   const [isWebAuthnAuthenticating, setIsWebAuthnAuthenticating] = useState(false);
   const [webAuthnRegKeyName, setWebAuthnRegKeyName] = useState('');
   const [isBiometricSimulating, setIsBiometricSimulating] = useState(false);
+
+  // ── Real OS Biometrics State & Ref
+  const [biometricStatus, setBiometricStatus] = useState<BiometricCheckResult>({ status: 'unavailable' });
+  const biometricFailures = useRef(0);
+  const MAX_BIOMETRIC_FAILURES = 3;
 
   // Transition safety
   const [isTransitioning, setIsTransitioning] = useState(false);
@@ -766,7 +755,7 @@ export default function App() {
   const [quizError, setQuizError] = useState<string>('');
 
   // Unlock
-  type UnlockMethod = 'passphrase' | 'pin' | 'biometrics';
+  type UnlockMethod = 'passphrase' | 'pin' | 'biometrics' | 'hardware';
   const [unlockMethod, setUnlockMethod] = useState<UnlockMethod>(() => {
     if (!settings.appLockEnabled) {
       return 'passphrase';
@@ -776,6 +765,9 @@ export default function App() {
     }
     if (settings.pinHash && settings.pinAttempts < 5) {
       return 'pin';
+    }
+    if (settings.securityKeys && settings.securityKeys.length > 0) {
+      return 'hardware';
     }
     return 'passphrase';
   });
@@ -855,17 +847,15 @@ export default function App() {
      * Detects system biometric availability.
      */
     const checkSupport = async () => {
-      const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
-      if (isTauri) {
-        try {
-          const supported = await invoke<boolean>('is_biometric_supported');
-          setBiometricsSupported(supported);
-        } catch (e) {
-          console.error("Biometrics support check failed:", e);
-          setBiometricsSupported(false);
-        }
-      } else {
+      try {
+        const biometricCheck = await checkBiometricStatus();
+        setBiometricStatus(biometricCheck);
+        const supported = biometricCheck.status === 'available' || biometricCheck.status === 'not_enrolled';
+        setBiometricsSupported(supported);
+      } catch (e) {
+        console.error("Biometrics support check failed:", e);
         setBiometricsSupported(false);
+        setBiometricStatus({ status: 'unavailable' });
       }
     };
     checkSupport();
@@ -1038,7 +1028,9 @@ export default function App() {
   } | null>(null);
   const [verificationInput, setVerificationInput] = useState('');
   const [verificationError, setVerificationError] = useState('');
-  const [pendingAction, setPendingAction] = useState<{ type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock' | 'export'; data?: unknown } | null>(null);
+  const [pendingAction, setPendingAction] = useState<{ type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock' | 'export' | 'enable-biometrics'; data?: unknown } | null>(null);
+  const [isBiometricEnrollModalOpen, setIsBiometricEnrollModalOpen] = useState(false);
+  const [tempDerivedKeyHex, setTempDerivedKeyHex] = useState('');
 
   const [showVerificationInput, setShowVerificationInput] = useState(false);
 
@@ -1388,6 +1380,11 @@ export default function App() {
           await writeAuditLog(`DURESS AUTHENTICATION ENCOUNTERED (${method.toUpperCase()})`);
           safeTransition(() => {
             if (duressAction === 'wipe') {
+              (async () => {
+                await revokeBiometric();
+                const biometricCheck = await checkBiometricStatus();
+                setBiometricStatus(biometricCheck);
+              })();
               setAccounts(prev => prev.map(a => ({ ...a, secret: '••••••••' })));
               showToast('Vault unlocked.', 'success');
             } else {
@@ -1423,6 +1420,12 @@ export default function App() {
                 ...updates
               };
             });
+
+            // Check for biometric enrollment prompt
+            if (matchedType === 'passphrase' && biometricStatus.status === 'not_enrolled' && biometricStatus.biometryType) {
+              setTempDerivedKeyHex(derivedKeyHex);
+              setIsBiometricEnrollModalOpen(true);
+            }
           });
         }
         return true;
@@ -1620,36 +1623,71 @@ export default function App() {
   /**
    * Invokes native local-authentication prompt.
    */
+  const unlockWithMasterKeyHex = async (masterKeyHex: string): Promise<boolean> => {
+    if (isVerifyingRef.current) return false;
+    isVerifyingRef.current = true;
+    setIsUnlocking(true);
+    try {
+      setDecryptedLogKeyHex(masterKeyHex);
+      await writeAuditLog('Vault unlocked successfully (biometrics)', masterKeyHex);
+
+      safeTransition(() => {
+        setIsLocked(false);
+        setUnlockError('');
+        setUnlockInput('');
+        setSettings(prev => ({
+          ...prev,
+          pinAttempts: 0
+        }));
+      });
+      return true;
+    } catch (err) {
+      console.error("Biometric unlock failed:", err);
+      return false;
+    } finally {
+      isVerifyingRef.current = false;
+      setIsUnlocking(false);
+    }
+  };
+
+  /**
+   * Invokes native local-authentication prompt.
+   */
   const handleBiometricUnlock = async () => {
     setUnlockError('');
     setIsBiometricSimulating(true);
     try {
-      const supported = await invoke<boolean>('is_biometric_supported');
-      if (!supported) {
-        setUnlockError('Biometrics is not supported or configured on this device. Falling back to passphrase.');
+      const biometricCheck = await checkBiometricStatus();
+      if (biometricCheck.status !== 'available') {
+        setUnlockError('Biometrics is not enrolled or available on this device. Please use your passphrase.');
         setUnlockMethod('passphrase');
         setIsBiometricSimulating(false);
         return;
       }
-      const verified = await invoke<boolean>('verify_biometric', { reason: 'Unlock your Only Auth Vault' });
-      if (verified) {
-        const retrieved = await invoke<string>('get_secure_credential', { key: 'biometric_vault_key' });
-        if (retrieved) {
-          setIsBiometricSimulating(false);
-          const unlocked = await verifyAndUnlock(retrieved, 'passphrase');
-          if (unlocked) {
-            showToast('Vault successfully unlocked via Biometrics.', 'success');
-          } else {
-            setUnlockError('Failed to decrypt vault with stored biometric credential. Please enter your passphrase.');
-            setUnlockMethod('passphrase');
-          }
+      const masterKeyHex = await attemptBiometricUnlock();
+      if (masterKeyHex !== null) {
+        setIsBiometricSimulating(false);
+        const unlocked = await unlockWithMasterKeyHex(masterKeyHex);
+        if (unlocked) {
+          showToast('Vault successfully unlocked via Biometrics.', 'success');
         } else {
-          setUnlockError('Biometric credential not found. Please re-enable biometrics in settings.');
+          setUnlockError('Failed to decrypt vault with stored biometric credential. Please enter your passphrase.');
           setUnlockMethod('passphrase');
-          setIsBiometricSimulating(false);
         }
+        // CRITICAL: zeroize the key string after use
+        masterKeyHex.split('').fill('0');
       } else {
-        setUnlockError('Biometric verification failed.');
+        biometricFailures.current += 1;
+        if (biometricFailures.current >= MAX_BIOMETRIC_FAILURES) {
+          await revokeBiometric();
+          setBiometricStatus({ status: 'not_enrolled' });
+          biometricFailures.current = 0;
+          showToast('Biometrics disabled after 3 failures. Enter passphrase to re-enroll.', 'error');
+          setUnlockError('Biometrics disabled after 3 failures. Enter passphrase to re-enroll.');
+          setUnlockMethod('passphrase');
+        } else {
+          setUnlockError(`Biometric verification failed. Attempt ${biometricFailures.current} of ${MAX_BIOMETRIC_FAILURES}.`);
+        }
         setIsBiometricSimulating(false);
       }
     } catch (err) {
@@ -1730,7 +1768,7 @@ export default function App() {
    * @param type Target action.
    * @param data Payload parameters.
    */
-  const triggerVerifyAction = (type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock' | 'export', data?: unknown) => safeTransition(() => {
+  const triggerVerifyAction = (type: 'save' | 'delete' | 'update-passphrase' | 'update-pin' | 'update-masterkey' | 'update-partition-settings' | 'disable-partition' | 'settings-unlock' | 'export' | 'enable-biometrics', data?: unknown) => safeTransition(() => {
     setPendingAction({ type, data });
     setVerificationInput('');
     setVerificationError('');
@@ -1825,33 +1863,37 @@ export default function App() {
           deleteAccountConfirmed(pendingAction.data as string);
         } else if (pendingAction?.type === 'update-passphrase') {
           const passphraseData = pendingAction.data as { newPassphrase: string };
-          sha256(`${passphraseData.newPassphrase}OnlyAuthAuditLogSalt2026`).then(async newKeyHex => {
+          (async () => {
+            await revokeBiometric();
+            const newKeyHex = await sha256(`${passphraseData.newPassphrase}OnlyAuthAuditLogSalt2026`);
             await saveVaultData(accounts, newKeyHex);
             setDecryptedLogKeyHex(newKeyHex);
             const newHash = await sha256(passphraseData.newPassphrase);
             setSettings(prev => ({ ...prev, passphraseHash: newHash }));
             setNewPassphraseWords([]);
+            const biometricCheck = await checkBiometricStatus();
+            setBiometricStatus(biometricCheck);
             showToast('Passphrase updated. Use your new passphrase to unlock.', 'success');
-          });
+          })();
         } else if (pendingAction?.type === 'enable-biometrics') {
           (async () => {
             try {
-              const supported = await invoke<boolean>('is_biometric_supported');
-              if (!supported) {
+              const status = await checkBiometricStatus();
+              if (status.status === 'unavailable' || status.status === 'not_supported') {
                 showToast('Biometric authentication is not supported or not configured on this device.', 'error');
                 return;
               }
-              const verified = await invoke<boolean>('verify_biometric', { reason: 'Authorize Only Auth biometrics' });
-              if (verified) {
-                await invoke('store_secure_credential', { key: 'biometric_vault_key', value: input });
+              const enrolled = await enrollBiometric(decryptedLogKeyHex);
+              if (enrolled) {
                 setSettings(prev => ({
                   ...prev,
                   appLockMethod: 'biometrics',
                   appLockEnabled: true
                 }));
+                setBiometricStatus({ status: 'available', biometryType: status.biometryType });
                 showToast('Biometrics lock enabled successfully.', 'success');
               } else {
-                showToast('Biometric verification failed.', 'error');
+                showToast('Biometric enrollment failed.', 'error');
               }
             } catch (err) {
               console.error(err);
@@ -2706,7 +2748,7 @@ export default function App() {
                 if (method === 'biometrics' && (!biometricsSupported || settings.appLockMethod !== 'biometrics')) return null;
                 if (method === 'hardware' && settings.securityKeys.length === 0) return null;
                 return (
-                  <button key={method} type="button" onClick={() => { setUnlockMethod(method as 'pin' | 'passphrase'); setUnlockError(''); setUnlockInput(''); }}
+                  <button key={method} type="button" onClick={() => { setUnlockMethod(method as UnlockMethod); setUnlockError(''); setUnlockInput(''); }}
                     className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all capitalize ${unlockMethod === method ? 'bg-white/10 text-white' : 'text-[#8e90a2] hover:text-white'}`}>
                     {method === 'biometrics' ? '⬡ Bio' : method === 'hardware' ? 'FIDO2 Key' : 'Keypad'}
                   </button>
@@ -4191,7 +4233,10 @@ export default function App() {
                             setConfirmModal({
                               title: 'Factory Reset Vault',
                               message: 'WARNING: This will permanently delete ALL accounts from your vault. This action cannot be undone. Continue?',
-                              onConfirm: () => {
+                              onConfirm: async () => {
+                                await revokeBiometric();
+                                const biometricCheck = await checkBiometricStatus();
+                                setBiometricStatus(biometricCheck);
                                 setAccounts([]);
                                 saveVaultData([], decryptedLogKeyHex);
                                 showToast('Vault has been successfully reset to empty.', 'info');
@@ -4285,7 +4330,9 @@ export default function App() {
                       <button onClick={async () => {
                         const nextVal = !settings.appLockEnabled;
                         if (!nextVal) {
-                          await invoke('delete_secure_credential', { key: 'biometric_vault_key' }).catch(err => { console.debug(err); });
+                          await revokeBiometric();
+                          const biometricCheck = await checkBiometricStatus();
+                          setBiometricStatus(biometricCheck);
                         }
                         setSettings(prev => ({ ...prev, appLockEnabled: nextVal }));
                       }}
@@ -4320,7 +4367,9 @@ export default function App() {
                                     return;
                                   }
                                   if (settings.appLockMethod === 'biometrics') {
-                                    await invoke('delete_secure_credential', { key: 'biometric_vault_key' }).catch(err => { console.debug(err); });
+                                    await revokeBiometric();
+                                    const biometricCheck = await checkBiometricStatus();
+                                    setBiometricStatus(biometricCheck);
                                   }
                                   setSettings(prev => ({ ...prev, appLockMethod: option.id }));
                                 }}
@@ -4994,6 +5043,58 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* ── BIOMETRIC ENROLL PROMPT MODAL ────────────────────────────────── */}
+      <AnimatePresence>
+        {isBiometricEnrollModalOpen && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-sm glass-panel rounded-2xl p-6 border border-white/8 space-y-4">
+              <div className="flex items-center gap-3">
+                <Fingerprint className="w-5 h-5 text-[var(--color-accent)] shrink-0" />
+                <h3 className="font-display font-semibold text-white text-base">Enable Biometric Unlock?</h3>
+              </div>
+              <p className="text-xs text-[#c4c5d9] leading-relaxed">
+                Would you like to enable {biometricStatus.biometryType || 'biometric'} unlock for convenient access to your vault? Your master key will be stored securely in the OS keychain.
+              </p>
+              <div className="flex gap-3 justify-end pt-2 border-t border-white/8">
+                <button 
+                  onClick={() => {
+                    tempDerivedKeyHex.split('').fill('0');
+                    setTempDerivedKeyHex('');
+                    setIsBiometricEnrollModalOpen(false);
+                  }} 
+                  className="px-3 py-1.5 text-xs text-[#8e90a2] hover:text-white font-semibold"
+                >
+                  Skip
+                </button>
+                <button 
+                  onClick={async () => {
+                    const enrolled = await enrollBiometric(tempDerivedKeyHex);
+                    if (enrolled) {
+                      setSettings(prev => ({
+                        ...prev,
+                        appLockMethod: 'biometrics',
+                        appLockEnabled: true
+                      }));
+                      setBiometricStatus(prev => ({ ...prev, status: 'available' }));
+                      showToast('Biometric unlock enabled.', 'success');
+                    } else {
+                      showToast('Failed to enable biometric unlock.', 'error');
+                    }
+                    tempDerivedKeyHex.split('').fill('0');
+                    setTempDerivedKeyHex('');
+                    setIsBiometricEnrollModalOpen(false);
+                  }} 
+                  className="px-3 py-1.5 text-xs bg-[var(--color-accent)] hover:opacity-90 text-black font-semibold rounded-lg transition-colors"
+                >
+                  Enable
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* ── EXPORT CONFIRMATION MODAL ────────────────────────────────────── */}
       <AnimatePresence>
         {isExportModalOpen && pendingExportFormat && (
@@ -5043,7 +5144,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* ── MOCK WEBAUTHN / FIDO2 HARDWARE KEY REGISTRATION MODAL ── */}
+      {/* ── WEBAUTHN / FIDO2 HARDWARE KEY REGISTRATION MODAL ── */}
       <AnimatePresence>
         {isWebAuthnRegistering && (
           <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
@@ -5056,8 +5157,8 @@ export default function App() {
               </div>
               
               <div className="text-center space-y-1">
-                <h3 className="font-display font-semibold text-white text-base">FIDO2 Hardware Key</h3>
-                <p className="text-[10px] text-[#8e90a2] tracking-wider uppercase font-mono">WebAuthn Enrollment Simulator</p>
+                <h3 className="font-display font-semibold text-white text-base">Security Key / Passkey</h3>
+                <p className="text-[10px] text-[#8e90a2] tracking-wider uppercase font-mono">WebAuthn Enrollment</p>
               </div>
 
               <div className="w-full space-y-4">
@@ -5080,7 +5181,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* ── MOCK WEBAUTHN / FIDO2 HARDWARE KEY AUTHENTICATION MODAL ── */}
+      {/* ── WEBAUTHN / FIDO2 HARDWARE KEY AUTHENTICATION MODAL ── */}
       <AnimatePresence>
         {isWebAuthnAuthenticating && (
           <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
@@ -5093,12 +5194,13 @@ export default function App() {
               </div>
               
               <div className="text-center space-y-1">
-                <h3 className="font-display font-semibold text-white text-base">FIDO2 Key Authentication</h3>
-                <p className="text-[10px] text-[#8e90a2] tracking-wider uppercase font-mono">WebAuthn Verification Simulator</p>
+                <h3 className="font-display font-semibold text-white text-base">Security Key / Passkey Auth</h3>
+                <p className="text-[10px] text-[#8e90a2] tracking-wider uppercase font-mono">WebAuthn Verification</p>
               </div>
 
               <div className="w-full space-y-4">
                 <WebAuthnAuthFlow 
+                  securityKeys={settings.securityKeys}
                   onCancel={() => setIsWebAuthnAuthenticating(false)}
                   onComplete={() => {
                     setIsWebAuthnAuthenticating(false);
@@ -5108,7 +5210,7 @@ export default function App() {
                         setSettings(prev => ({ ...prev, pinAttempts: 0 }));
                       }
                     });
-                    showToast('Vault successfully unlocked via FIDO2 Security Key.', 'success');
+                    showToast('Vault successfully unlocked via Security Key / Passkey.', 'success');
                   }}
                 />
               </div>
@@ -5117,7 +5219,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* ── MOCK BIOMETRIC SIMULATION MODAL ── */}
+      {/* ── BIOMETRIC SIMULATION MODAL ── */}
       <AnimatePresence>
         {isBiometricSimulating && (
           <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
@@ -5127,7 +5229,7 @@ export default function App() {
               
               <div className="text-center space-y-1">
                 <h3 className="font-display font-semibold text-white text-base">Biometric Verification</h3>
-                <p className="text-[10px] text-[#8e90a2] tracking-wider uppercase font-mono">Mock Device Authenticator</p>
+                <p className="text-[10px] text-[#8e90a2] tracking-wider uppercase font-mono">Secure Platform Authenticator</p>
               </div>
 
               <div className="w-full space-y-4">

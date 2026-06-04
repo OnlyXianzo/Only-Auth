@@ -7,6 +7,9 @@
     "core:default",
     "opener:default",
     "allow-app-commands",
-    "core:window:allow-set-content-protected"
+    "core:window:allow-set-content-protected",
+    "biometry:default",
+    "biometry:allow-status",
+    "biometry:allow-authenticate"
   ]
 }

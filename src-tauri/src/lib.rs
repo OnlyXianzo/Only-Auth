@@ -1,6 +1,7 @@
 mod crypto;
 mod storage;
 mod biometrics;
+mod biometric;
 
 use tauri::Manager;
 use crypto::{
@@ -26,6 +27,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_biometry::init())
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_content_protected(true);
@@ -54,7 +56,11 @@ pub fn run() {
             verify_biometric,
             store_secure_credential,
             get_secure_credential,
-            delete_secure_credential
+            delete_secure_credential,
+            biometric::store_biometric_key,
+            biometric::retrieve_biometric_key,
+            biometric::delete_biometric_key,
+            biometric::is_biometric_enrolled
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
