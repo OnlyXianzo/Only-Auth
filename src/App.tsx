@@ -1664,7 +1664,7 @@ export default function App() {
         setIsBiometricSimulating(false);
         return;
       }
-      const masterKeyHex = await attemptBiometricUnlock();
+      let masterKeyHex = await attemptBiometricUnlock();
       if (masterKeyHex !== null) {
         setIsBiometricSimulating(false);
         const unlocked = await unlockWithMasterKeyHex(masterKeyHex);
@@ -1674,8 +1674,9 @@ export default function App() {
           setUnlockError('Failed to decrypt vault with stored biometric credential. Please enter your passphrase.');
           setUnlockMethod('passphrase');
         }
-        // CRITICAL: zeroize the key string after use
-        masterKeyHex.split('').fill('0');
+        // NOTE: JS strings are immutable — true zeroization happens in Rust (zeroize crate).
+        // Overwrite the variable reference to allow GC to collect the original string.
+        masterKeyHex = '';
       } else {
         biometricFailures.current += 1;
         if (biometricFailures.current >= MAX_BIOMETRIC_FAILURES) {
@@ -5059,7 +5060,6 @@ export default function App() {
               <div className="flex gap-3 justify-end pt-2 border-t border-white/8">
                 <button 
                   onClick={() => {
-                    tempDerivedKeyHex.split('').fill('0');
                     setTempDerivedKeyHex('');
                     setIsBiometricEnrollModalOpen(false);
                   }} 
@@ -5081,7 +5081,6 @@ export default function App() {
                     } else {
                       showToast('Failed to enable biometric unlock.', 'error');
                     }
-                    tempDerivedKeyHex.split('').fill('0');
                     setTempDerivedKeyHex('');
                     setIsBiometricEnrollModalOpen(false);
                   }} 
