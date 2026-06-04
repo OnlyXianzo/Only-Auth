@@ -19,6 +19,7 @@ commands.allow = [
   "decrypt_metadata",
   "validate_import_payload",
   "export_file",
+  "import_file",
   "is_biometric_supported",
   "verify_biometric",
   "store_secure_credential",

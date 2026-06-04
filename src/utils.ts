@@ -505,3 +505,20 @@ export async function exportFile(filename: string, content: string): Promise<str
   throw new Error('Tauri context unavailable');
 }
 
+/**
+ * Open a native file dialog and read the selected file's content.
+ * Used for imports on platforms where HTML <input type="file"> is unreliable (Android WebView).
+ * Returns the file content as a string, or null if the user cancelled.
+ */
+export async function importFile(): Promise<string | null> {
+  const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
+  if (isTauri) {
+    try {
+      return await invoke<string>('import_file');
+    } catch (err) {
+      if (err === 'Import cancelled') return null;
+      throw err;
+    }
+  }
+  throw new Error('Tauri context unavailable');
+}

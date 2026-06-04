@@ -299,6 +299,32 @@ pub async fn export_file(app: AppHandle, filename: String, content: String) -> R
     }
 }
 
+/// Tauri command that opens a native file dialog, reads the selected file, and returns its content.
+///
+/// This is used for importing accounts on platforms where HTML `<input type="file">` is unreliable
+/// (e.g., Android WebView). Accepts .json, .txt, .uri, and .sealed files.
+///
+/// # Errors
+/// Returns an error string if the user cancels, or if reading fails.
+#[tauri::command]
+pub async fn import_file(app: AppHandle) -> Result<String, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let file_path = app.dialog()
+        .file()
+        .add_filter("Import Files", &["json", "txt", "uri", "sealed"])
+        .blocking_pick_file();
+
+    if let Some(path_wrapper) = file_path {
+        let path = path_wrapper.into_path().map_err(|e| e.to_string())?;
+        let content = fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read file: {e}"))?;
+        Ok(content)
+    } else {
+        Err("Import cancelled".to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

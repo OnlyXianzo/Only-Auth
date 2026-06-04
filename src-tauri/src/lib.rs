@@ -13,7 +13,7 @@ use crypto::{
 };
 use storage::{
     load_vault_data, save_vault_data,
-    write_audit_log, read_audit_logs, export_file
+    write_audit_log, read_audit_logs, export_file, import_file
 };
 use biometrics::{
     is_biometric_supported, verify_biometric,
@@ -52,6 +52,7 @@ pub fn run() {
             decrypt_metadata,
             validate_import_payload,
             export_file,
+            import_file,
             is_biometric_supported,
             verify_biometric,
             store_secure_credential,

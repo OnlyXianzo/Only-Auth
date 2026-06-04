@@ -17,7 +17,7 @@ import {
   loadVaultData, saveVaultData,
   argon2idHash, argon2idVerify,
   encryptBackup, decryptBackup, writeAuditLog, readAuditLogs,
-  setWindowScreenshotProtection, encryptMetadata, decryptMetadata, exportFile
+  setWindowScreenshotProtection, encryptMetadata, decryptMetadata, exportFile, importFile
 } from './utils';
 import {
   checkBiometricStatus,
@@ -4123,11 +4123,29 @@ export default function App() {
                           {/* Only Auth JSON Import (preserves settings) */}
                           <div className="relative">
                             <input type="file" accept=".json" onChange={handleImportOnlyAuth} className="hidden" id="onlyauth-import-input" />
-                            <label htmlFor="onlyauth-import-input"
+                            <button type="button"
+                              onClick={async () => {
+                                try {
+                                  const content = await importFile();
+                                  if (!content) return; // cancelled
+                                  const result = parseOnlyAuthJSON(content);
+                                  if (result.accounts.length === 0) {
+                                    showToast(result.warnings[0] || 'No accounts found.', 'error');
+                                    return;
+                                  }
+                                  safeTransition(() => {
+                                    setAccounts(prev => [...result.accounts, ...prev]);
+                                    showToast(`Imported ${result.accounts.length} account${result.accounts.length !== 1 ? 's' : ''} from Only Auth JSON.`, 'success');
+                                  });
+                                } catch {
+                                  // Tauri unavailable — fall back to HTML file input
+                                  document.getElementById('onlyauth-import-input')?.click();
+                                }
+                              }}
                               className="w-full h-10 px-4 rounded-xl border border-white/10 hover:bg-white/5 transition-all text-xs font-semibold flex items-center justify-between text-white cursor-pointer">
                               <span>Only Auth JSON Backup</span>
                               <ChevronRight className="w-3.5 h-3.5 text-[#8e90a2]" />
-                            </label>
+                            </button>
                           </div>
 
                           {/* Universal otpauth:// URI Import (Ente, Bitwarden, Google Auth, etc.) */}
@@ -4150,11 +4168,29 @@ export default function App() {
                               };
                               reader.readAsText(file);
                             }} className="hidden" id="uri-import-input" />
-                            <label htmlFor="uri-import-input"
+                            <button type="button"
+                              onClick={async () => {
+                                try {
+                                  const content = await importFile();
+                                  if (!content) return; // cancelled
+                                  const result = parseOTPAuthBatch(content);
+                                  if (result.accounts.length === 0) {
+                                    showToast(result.warnings[0] || 'No valid URIs found.', 'error');
+                                    return;
+                                  }
+                                  safeTransition(() => {
+                                    setAccounts(prev => [...result.accounts, ...prev]);
+                                    showToast(`Imported ${result.accounts.length} account${result.accounts.length !== 1 ? 's' : ''} from otpauth URIs.`, 'success');
+                                  });
+                                } catch {
+                                  // Tauri unavailable — fall back to HTML file input
+                                  document.getElementById('uri-import-input')?.click();
+                                }
+                              }}
                               className="w-full h-10 px-4 rounded-xl border border-white/10 hover:bg-white/5 transition-all text-xs font-semibold flex items-center justify-between text-white cursor-pointer">
                               <span>otpauth:// URI List (.txt)</span>
                               <ChevronRight className="w-3.5 h-3.5 text-[#8e90a2]" />
-                            </label>
+                            </button>
                           </div>
                         </div>
                         
@@ -4269,19 +4305,32 @@ export default function App() {
                               try {
                                 const raw = buildSealedPayload(accounts, settings);
                                 const encrypted = await encryptBackup(raw, backupPassword);
-                                const blob = new Blob([encrypted], { type: 'text/plain' });
-                                const url = URL.createObjectURL(blob);
-                                const downloadLink = document.createElement('a');
-                                downloadLink.href = url;
-                                downloadLink.download = `OnlyAuth_Sealed_Backup_${new Date().toISOString().slice(0, 10)}.sealed`;
-                                document.body.appendChild(downloadLink);
-                                downloadLink.click();
-                                document.body.removeChild(downloadLink);
-                                showToast('Encrypted backup with Integrity Seal generated.', 'success');
+                                const filename = `OnlyAuth_Sealed_Backup_${new Date().toISOString().slice(0, 10)}.sealed`;
+                                const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ !== undefined || (window as any).__TAURI__ !== undefined);
+
+                                if (isTauri) {
+                                  const savedPath = await exportFile(filename, encrypted);
+                                  showToast(`Sealed backup saved to: ${savedPath}`, 'success');
+                                } else {
+                                  const blob = new Blob([encrypted], { type: 'text/plain' });
+                                  const url = URL.createObjectURL(blob);
+                                  const downloadLink = document.createElement('a');
+                                  downloadLink.href = url;
+                                  downloadLink.download = filename;
+                                  document.body.appendChild(downloadLink);
+                                  downloadLink.click();
+                                  document.body.removeChild(downloadLink);
+                                  showToast('Encrypted backup with Integrity Seal generated.', 'success');
+                                }
                                 setBackupPassword('');
                                 setSettings(prev => ({ ...prev, lastBackupDate: new Date().toISOString() }));
-                              } catch (err) { console.warn(err);
-                                showToast('Backup encryption failed.', 'error');
+                              } catch (err) {
+                                if (err === 'Save cancelled') {
+                                  showToast('Export cancelled.', 'info');
+                                } else {
+                                  console.warn(err);
+                                  showToast('Backup encryption failed.', 'error');
+                                }
                               }
                             }}
                             className="w-full h-10 px-4 rounded-xl bg-gradient-to-r from-[#2d5bff] to-[#8B5CF6] text-white hover:opacity-90 transition-all text-xs font-semibold flex items-center justify-between"
