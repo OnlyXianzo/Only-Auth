@@ -1,4 +1,6 @@
 use keyring::Entry;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use std::process::Command;
 
 const SERVICE_NAME: &str = "only-auth-vault";
 

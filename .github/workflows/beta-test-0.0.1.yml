@@ -1,4 +1,4 @@
-name: beta-test-0.0.1
+name: Only-Auth(unstable)
 
 on:
   workflow_dispatch:
@@ -149,6 +149,9 @@ jobs:
 
       - name: Initialize Android environment
         run: bun tauri android init --ci --skip-targets-install
+
+      - name: Patch Android Project
+        run: bun run patch-android
 
       - name: Build Android App
         run: bun tauri android build --apk
