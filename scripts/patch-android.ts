@@ -141,10 +141,10 @@ if (fs.existsSync(gradlePath)) {
   console.log('Found build.gradle.kts at:', gradlePath);
   let content = fs.readFileSync(gradlePath, 'utf8');
 
-  // Replace org.jetbrains.kotlin.android version to 2.1.0
+  // Replace org.jetbrains.kotlin.android or kotlin("android") version to 2.1.0
   const updatedContent = content.replace(
-    /id\("org\.jetbrains\.kotlin\.android"\)\s*version\s*"[^"]+"/,
-    'id("org.jetbrains.kotlin.android") version "2.1.0"'
+    /(id\("org\.jetbrains\.kotlin\.android"\)|kotlin\("android"\))\s*version\s*["'][^"']+["']/,
+    '$1 version "2.1.0"'
   );
 
   if (updatedContent !== content) {
