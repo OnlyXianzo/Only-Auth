@@ -75,10 +75,11 @@ import android.os.Bundle
 import android.view.WindowManager
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
+import android.webkit.WebView
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
-import app.tauri.plugin.TauriActivity
+import app.tauri.TauriActivity
 
 class MainActivity : TauriActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -89,9 +90,12 @@ class MainActivity : TauriActivity() {
             WindowManager.LayoutParams.FLAG_SECURE,
             WindowManager.LayoutParams.FLAG_SECURE
         )
+    }
 
+    override fun onWebViewCreate(webView: WebView) {
+        super.onWebViewCreate(webView)
+        
         // 2. WebView Camera Permission Bridge
-        val webView = this.webview ?: return
         webView.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest) {
                 runOnUiThread {
