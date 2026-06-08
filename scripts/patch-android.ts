@@ -142,9 +142,15 @@ if (fs.existsSync(gradlePath)) {
   let content = fs.readFileSync(gradlePath, 'utf8');
 
   // Replace org.jetbrains.kotlin.android or kotlin("android") version to 2.1.0
-  const updatedContent = content.replace(
+  let updatedContent = content.replace(
     /(id\("org\.jetbrains\.kotlin\.android"\)|kotlin\("android"\))\s*version\s*["'][^"']+["']/,
     '$1 version "2.1.0"'
+  );
+
+  // Replace classpath kotlin-gradle-plugin version to 2.1.0
+  updatedContent = updatedContent.replace(
+    /(classpath\(["']org\.jetbrains\.kotlin:kotlin-gradle-plugin:)[^"']+(["']\))/,
+    '$12.1.0$2'
   );
 
   if (updatedContent !== content) {
