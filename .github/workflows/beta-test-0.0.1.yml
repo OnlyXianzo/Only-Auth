@@ -150,6 +150,13 @@ jobs:
       - name: Initialize Android environment
         run: bun tauri android init --ci --skip-targets-install
 
+      - name: Inspect Gradle Files
+        run: |
+          echo "=== ROOT build.gradle.kts ==="
+          cat src-tauri/gen/android/build.gradle.kts || true
+          echo "=== APP build.gradle.kts ==="
+          cat src-tauri/gen/android/app/build.gradle.kts || true
+
       - name: Patch Android Project
         run: bun run patch-android
 
