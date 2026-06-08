@@ -69,19 +69,30 @@ if (activityPath) {
   // skipcq: JS-0002
   console.log('Found MainActivity.kt at:', activityPath);
   
-  const patchedActivity = `package com.onlyauth.app
-
-import android.os.Bundle
-import android.view.WindowManager
-import android.webkit.PermissionRequest
-import android.webkit.WebChromeClient
-import android.webkit.WebView
-import android.Manifest
-import android.content.pm.PackageManager
-import androidx.core.content.ContextCompat
-import app.tauri.TauriActivity
-
-class MainActivity : TauriActivity() {
+  const content = fs.readFileSync(activityPath, 'utf8');
+  const packageMatch = content.match(/package\s+[a-zA-Z0-9_.]+/);
+  const packageLine = packageMatch ? packageMatch[0] : 'package com.onlyauth.app';
+  
+  // Extract all original imports
+  const imports = content.match(/import\s+[a-zA-Z0-9_.*]+/g) || [];
+  const originalImportsSet = new Set(imports);
+  
+  // Required imports for our custom overrides
+  const requiredImports = [
+    'import android.os.Bundle',
+    'import android.view.WindowManager',
+    'import android.webkit.PermissionRequest',
+    'import android.webkit.WebChromeClient',
+    'import android.webkit.WebView',
+    'import android.Manifest',
+    'import android.content.pm.PackageManager',
+    'import androidx.core.content.ContextCompat'
+  ];
+  
+  requiredImports.forEach(imp => originalImportsSet.add(imp));
+  const allImportsString = Array.from(originalImportsSet).join('\n');
+  
+  const classBody = `class MainActivity : TauriActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
@@ -128,9 +139,16 @@ class MainActivity : TauriActivity() {
             }
         }
     }
-}
+}`;
+
+  const finalContent = `${packageLine}
+
+${allImportsString}
+
+${classBody}
 `;
-  fs.writeFileSync(activityPath, patchedActivity, 'utf8');
+  
+  fs.writeFileSync(activityPath, finalContent, 'utf8');
   // skipcq: JS-0002
   console.log('Successfully patched MainActivity.kt with FLAG_SECURE and camera permission bridge.');
 } else {
